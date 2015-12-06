@@ -1,0 +1,121 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>{36e96d57-7d1b-4321-9979-b5f6b13c9ba9}</ProjectGuid>
+    <ProjectHome />
+    <StartupFile>scripts\mibdump.py</StartupFile>
+    <SearchPath />
+    <WorkingDirectory>.</WorkingDirectory>
+    <OutputPath>.</OutputPath>
+    <ProjectTypeGuids>{888888a0-9f3d-457c-b088-3a5042f75d52}</ProjectTypeGuids>
+    <LaunchProvider>Standard Python launcher</LaunchProvider>
+    <InterpreterId />
+    <InterpreterVersion />
+    <CommandLineArguments>NET-SNMP-TUTORIAL-MIB</CommandLineArguments>
+    <EnableNativeCodeDebugging>False</EnableNativeCodeDebugging>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'" />
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'" />
+  <PropertyGroup>
+    <VisualStudioVersion Condition=" '$(VisualStudioVersion)' == '' ">10.0</VisualStudioVersion>
+    <PtvsTargetsFile>$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets</PtvsTargetsFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="CHANGES.txt" />
+    <Content Include="LICENSE.txt" />
+    <Content Include="pysmi.egg-info\dependency_links.txt" />
+    <Content Include="pysmi.egg-info\requires.txt" />
+    <Content Include="pysmi.egg-info\SOURCES.txt" />
+    <Content Include="pysmi.egg-info\top_level.txt" />
+    <Content Include="README.txt" />
+    <Content Include="requirements.txt" />
+    <Content Include="THANKS.txt" />
+    <Content Include="TODO.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="examples\always-borrow-precompiled-pysnmp-files.py" />
+    <Compile Include="examples\borrow-precompiled-pysnmp-files-on-failure.py" />
+    <Compile Include="examples\compile-smistar-mibs-into-pysnmp-files-if-needed.py" />
+    <Compile Include="examples\compile-smiv2-mibs-from-text-into-pysnmp-code.py" />
+    <Compile Include="examples\download-and-compile-smistar-mibs-into-pysnmp-files.py" />
+    <Compile Include="pysmi\borrower\base.py" />
+    <Compile Include="pysmi\borrower\pyfile.py" />
+    <Compile Include="pysmi\borrower\__init__.py" />
+    <Compile Include="pysmi\codegen\base.py" />
+    <Compile Include="pysmi\codegen\netsnmp.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="pysmi\codegen\null.py" />
+    <Compile Include="pysmi\codegen\pysnmp.py" />
+    <Compile Include="pysmi\codegen\symtable.py" />
+    <Compile Include="pysmi\codegen\__init__.py" />
+    <Compile Include="pysmi\compat.py" />
+    <Compile Include="pysmi\compiler.py" />
+    <Compile Include="pysmi\debug.py" />
+    <Compile Include="pysmi\error.py" />
+    <Compile Include="pysmi\lexer\base.py" />
+    <Compile Include="pysmi\lexer\smi.py" />
+    <Compile Include="pysmi\lexer\__init__.py" />
+    <Compile Include="pysmi\mibinfo.py" />
+    <Compile Include="pysmi\parser\base.py" />
+    <Compile Include="pysmi\parser\dialect.py" />
+    <Compile Include="pysmi\parser\null.py" />
+    <Compile Include="pysmi\parser\smi.py" />
+    <Compile Include="pysmi\parser\smiv1.py" />
+    <Compile Include="pysmi\parser\smiv1compat.py" />
+    <Compile Include="pysmi\parser\smiv2.py" />
+    <Compile Include="pysmi\parser\__init__.py" />
+    <Compile Include="pysmi\reader\base.py" />
+    <Compile Include="pysmi\reader\callback.py" />
+    <Compile Include="pysmi\reader\ftpclient.py" />
+    <Compile Include="pysmi\reader\httpclient.py" />
+    <Compile Include="pysmi\reader\localfile.py" />
+    <Compile Include="pysmi\reader\url.py" />
+    <Compile Include="pysmi\reader\__init__.py" />
+    <Compile Include="pysmi\searcher\base.py" />
+    <Compile Include="pysmi\searcher\pyfile.py" />
+    <Compile Include="pysmi\searcher\pypackage.py" />
+    <Compile Include="pysmi\searcher\stub.py" />
+    <Compile Include="pysmi\searcher\__init__.py" />
+    <Compile Include="pysmi\writer\base.py" />
+    <Compile Include="pysmi\writer\callback.py" />
+    <Compile Include="pysmi\writer\pyfile.py" />
+    <Compile Include="pysmi\writer\__init__.py" />
+    <Compile Include="pysmi\__init__.py" />
+    <Compile Include="scripts\mibdump.py" />
+    <Compile Include="setup.py" />
+    <Compile Include="tests\suite.py" />
+    <Compile Include="tests\test_agentcapabilities_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_imports_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_modulecompliance_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_moduleidentity_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_notificationgroup_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_notificationtype_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_objectgroup_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_objectidentity_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_objecttype_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_smiv1_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_traptype_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_typedeclaration_smiv1_pysnmp.py" />
+    <Compile Include="tests\test_typedeclaration_smiv2_pysnmp.py" />
+    <Compile Include="tests\test_valuedeclaration_smiv2_pysnmp.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="examples" />
+    <Folder Include="pysmi" />
+    <Folder Include="pysmi.egg-info" />
+    <Folder Include="pysmi\borrower" />
+    <Folder Include="pysmi\codegen" />
+    <Folder Include="pysmi\lexer" />
+    <Folder Include="pysmi\parser" />
+    <Folder Include="pysmi\reader" />
+    <Folder Include="pysmi\searcher" />
+    <Folder Include="pysmi\writer" />
+    <Folder Include="scripts" />
+    <Folder Include="tests" />
+  </ItemGroup>
+  <Import Project="$(PtvsTargetsFile)" Condition="Exists($(PtvsTargetsFile))" />
+  <Import Project="$(MSBuildToolsPath)\Microsoft.Common.targets" Condition="!Exists($(PtvsTargetsFile))" />
+</Project>
