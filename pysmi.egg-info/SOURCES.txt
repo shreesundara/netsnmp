@@ -21,6 +21,7 @@ pysmi/mibinfo.py
 pysmi.egg-info/PKG-INFO
 pysmi.egg-info/SOURCES.txt
 pysmi.egg-info/dependency_links.txt
+pysmi.egg-info/pbr.json
 pysmi.egg-info/requires.txt
 pysmi.egg-info/top_level.txt
 pysmi.egg-info/zip-safe

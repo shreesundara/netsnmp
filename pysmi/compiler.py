@@ -189,6 +189,7 @@ class MibCompiler(object):
         processed = {}
         parsedMibs = {}; failedMibs = {}; borrowedMibs = {}; builtMibs = {}
         symbolTableMap = {}
+        originalMib = mibnames[0]
         mibsToParse = [x for x in mibnames]
         while mibsToParse:
             mibname = mibsToParse.pop(0)
@@ -284,7 +285,7 @@ class MibCompiler(object):
         # Generate code for parsed MIBs
         #
 
-        for mibname in parsedMibs.copy():
+        for mibname in [originalMib]:
             fileInfo, mibInfo, mibTree = parsedMibs[mibname]
 
             comments = [

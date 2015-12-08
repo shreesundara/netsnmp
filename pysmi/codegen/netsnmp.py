@@ -562,6 +562,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         name = self.transOpers(name)
         oidStr, parentOid = oid
         outStr = 'genObjectIdentity'
+        self.regSym(name, outStr, parentOid)
         return objStr
 
     def genObjectType(self, data, classmode=0):
@@ -579,6 +580,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         classtype = name in self.symbolTable[self.moduleName[0]]['_symtable_cols'] and 'MibTableColumn' or classtype
         defval = self.genDefVal(defval, objname=name)
         outStr = 'genObjectType'
+        self.regSym(name, outStr,parentOid)
         return outStr
 
     def genTrapType(self, data, classmode=0):
@@ -589,11 +591,18 @@ class NetSnmpCodeGen(AbstractCodeGen):
         enterpriseStr, parentOid = enterprise
         varStr = ''
         outStr = 'genTrapType'
+        self.regSym(name, outStr,parentOid)
         return outStr
 
     def genTypeDeclaration(self, data, classmode=0):
         print('genTypeDeclaration')
         outStr = 'genTypeDeclaration'
+        name , declaration = data
+        if declaration:
+            parentType, attrs = declaration
+            if parentType:
+                name = self.transOpers(name)
+                self.regSym(name, outStr)
         return outStr
 
     def genValueDeclaration(self, data, classmode=0):
@@ -603,6 +612,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         name = self.transOpers(name)
         oidStr, parentOid = oid
         outStr = 'genValueDeclaration'
+        self.regSym(name, outStr,parentOid)
         return outStr
 
     def genBitNames(self, data, classmode=0):
