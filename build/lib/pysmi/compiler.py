@@ -189,6 +189,7 @@ class MibCompiler(object):
         processed = {}
         parsedMibs = {}; failedMibs = {}; borrowedMibs = {}; builtMibs = {}
         symbolTableMap = {}
+        originalMib = mibnames[0]
         mibsToParse = [x for x in mibnames]
         while mibsToParse:
             mibname = mibsToParse.pop(0)

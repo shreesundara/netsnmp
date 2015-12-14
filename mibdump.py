@@ -13,6 +13,7 @@ from pysmi.searcher.pypackage import PyPackageSearcher
 from pysmi.searcher.stub import StubSearcher
 from pysmi.borrower.pyfile import PyFileBorrower
 from pysmi.writer.pyfile import PyFileWriter
+from pysmi.writer.cfile import CFileWriter
 from pysmi.parser.smi import parserFactory
 from pysmi.parser.dialect import smiV1Relaxed
 from pysmi.codegen.pysnmp import PySnmpCodeGen, defaultMibPackages, baseMibs, fakeMibs
@@ -158,12 +159,14 @@ if not mibStubs:
     mibStubs = [ x for x in baseMibs if x not in fakeMibs ]
 
 if not mibSources:
-    mibSources = [ 'file:///usr/share/snmp/mibs',
+    mibSources = [ 'file:///usr/share/snmp/mibs/Avi',
+                   'file:///usr/share/snmp/mibs',
                    'http://mibs.snmplabs.com/asn1/@mib@' ]
 
 if not mibBorrowers:
     mibBorrowers = [ ('http://mibs.snmplabs.com/pysnmp/notexts/@mib@', False),
-                     ('http://mibs.snmplabs.com/pysnmp/fulltexts/@mib@', True) ]
+                     ('http://mibs.snmplabs.com/pysnmp/fulltexts/@mib@', True),
+                     ('file:///Python27/Lib/site-packages/pysnmp_mibs', True) ]
 
 if inputMibs:
     mibSources.extend(list(set(['file://' + os.path.abspath(os.path.dirname(x))
@@ -214,7 +217,7 @@ Try various filenames while searching for MIB module: %s
 mibCompiler = MibCompiler(
     parserFactory(**smiV1Relaxed)(tempdir=cacheDirectory), 
     NetSnmpCodeGen(),
-    PyFileWriter(dstDirectory).setOptions(
+    CFileWriter(dstDirectory).setOptions(
         pyCompile=pyCompileFlag, pyOptimizationLevel=pyOptimizationLevel
     )
 )
