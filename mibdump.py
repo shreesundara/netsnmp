@@ -213,13 +213,12 @@ Try various filenames while searching for MIB module: %s
        doFuzzyMatchingFlag and 'yes' or 'no'))
 
 # Initialize compiler infrastructure
+writer = CFileWriter(dstDirectory)
 
 mibCompiler = MibCompiler(
     parserFactory(**smiV1Relaxed)(tempdir=cacheDirectory), 
-    NetSnmpCodeGen(),
-    CFileWriter(dstDirectory).setOptions(
-        pyCompile=pyCompileFlag, pyOptimizationLevel=pyOptimizationLevel
-    )
+    NetSnmpCodeGen(writer),
+    writer
 )
 
 try:
