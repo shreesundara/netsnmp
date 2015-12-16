@@ -1,4 +1,5 @@
 import sys
+import ast
 from time import strptime, strftime
 from keyword import iskeyword
 from pysmi.mibinfo import MibInfo
@@ -635,12 +636,14 @@ class NetSnmpCodeGen(AbstractCodeGen):
         #outStr += '\n'
         #if augmention:
         #    augmention = self.transOpers(augmention)
-        #    outStr += augmention + '.registerAugmentions(("' + self.moduleName[0] + \
+        #    outStr += augmention + '.registerAugmentions(("' +
+        #    self.moduleName[0] + \
         #              '", "' + name + '"))\n'
-        #    outStr += name + '.setIndexNames(*' + augmention + '.getIndexNames())\n'
+        #    outStr += name + '.setIndexNames(*' + augmention +
+        #    '.getIndexNames())\n'
         #if self.genRules['text'] and description:
         #    outStr += self.ifTextStr + name + description + '\n'
-        outStr = self.codeGenClassTable[classtype](self, name,oid, subtype, maxaccess)
+        outStr = self.codeGenClassTable[classtype](self, name,syntax, units,maxaccess, description, augmention, index, defval, oid, subtype)
         self.regSym(name, outStr, parentOid)
         if fakeSyms: # fake symbols for INDEX to support SMIv1
             for i in range(len(fakeSyms)):
@@ -1008,7 +1011,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += '}\n'
         return outStr
 
-    def genIntCode(self, name, oid, subtype, maxaccess):
+    def genIntCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
         outStr = 'static int netsnmp_' + name + ' = 42;\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
         outStr += 'void register_' + name + '(void) {\n'
@@ -1023,7 +1026,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += '}\n\n'
         return outStr
 
-    def genTimeTicksCode(self, name, oid, subtype, maxaccess):
+    def genTimeTicksCode(self, name, syntax, units, maxaccess,description, augmention, index, defval,oid, subtype):
         outStr = 'static unsigned long netsnmp_' + name + ' = 42;\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
         outStr += 'void register_' + name + '(void) {\n'
@@ -1038,20 +1041,20 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += '}\n\n'
         return outStr
 
-    def genStringCode(self, name, oid, subtype, maxaccess):
+    def genStringCode(self, name, syntax, units, maxaccess, description, augmention, index, defval,oid, subtype):
         minConstraint, maxConstraint = subtype[1].get('ValueSizeConstraint',(0,0))
         if maxConstraint == 0:
             stringLength = 256
         else:
             if minConstraint == 0:
-                stringLength = maxConstraint + 1;
+                stringLength = maxConstraint + 1
             else:
                 stringLength = maxConstraint
-        outStr = 'static char netsnmp_' + name + '['+str(stringLength)+'] = "Avinash";\n'
+        outStr = 'static char netsnmp_' + name + '[' + str(stringLength) + '] = "Avinash";\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
-        outStr += 'void register_' +name + '(void) {\n'
+        outStr += 'void register_' + name + '(void) {\n'
         outStr += 'const oid ' + name + '_oid[] = ' + str(oid).replace('[','{').replace(']','}') + ';\n'
-        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("'+name+'", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
+        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("' + name + '", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
         outStr += '}\n\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
         outStr += 'if(reqinfo->mode == MODE_GET) {\n'
@@ -1061,17 +1064,17 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += '}\n\n'
         return outStr
 
-    def genOidCode(self, name, oid, subtype, maxaccess):
+    def genOidCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
         outStr = 'static oid netsnmp_' + name + '[MAX_OID_LEN] = { 0 };\n'
         outStr += 'static int netsnmp_' + name + '_byte_length = 1;\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
-        outStr += 'void register_' +name + '(void) {\n'
+        outStr += 'void register_' + name + '(void) {\n'
         outStr += 'const oid ' + name + '_oid[] = ' + str(oid).replace('[','{').replace(']','}') + ';\n'
-        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("'+name+'", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
+        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("' + name + '", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
         outStr += '}\n\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
         outStr += 'if(reqinfo->mode == MODE_GET) {\n'
-        outStr += 'snmp_set_var_typed_value(requests->requestvb, ASN_OBJECT_ID, netsnmp_' + name + ', netsnmp_' + name + '_byte_length);\n';
+        outStr += 'snmp_set_var_typed_value(requests->requestvb, ASN_OBJECT_ID, netsnmp_' + name + ', netsnmp_' + name + '_byte_length);\n'
         outStr += '}\n'
         outStr += 'return SNMP_ERR_NOERROR;\n'
         outStr += '}\n\n'
@@ -1082,28 +1085,46 @@ class NetSnmpCodeGen(AbstractCodeGen):
                    'string':genStringCode,
                    'oid': genOidCode }
 
-    def genScalarCode(self, name, oid, subtype, maxaccess):
+    def genScalarCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
         self.codeSymbols.append(name)
         ctype = self.ctypeClasses.get(subtype[0])
         oidStr, parendOid = oid
-        outStr = self.codeGenTable[ctype](self,name, oidStr,subtype, maxaccess)
+        outStr = self.codeGenTable[ctype](self,name, syntax, units, maxaccess, description, augmention, index, defval, oidStr,subtype)
         return outStr
         
-    def genTableCode(self, name, oid, subtype, maxaccess):
-        self.tables[name] = {'data': (oid, subtype, maxaccess)}
+    def genTableCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
+        tempDict = self.getDictionary(name, syntax, units, maxaccess,description, augmention,index, defval,oid, subtype)
+        self.tables[name] = {'data': tempDict}
         return ''
         
-    def genTableRowCode(self, name, oid, subtype, maxaccess):
+    def genTableRowCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
         oidStr, parentOid = oid
-        self.tables[parentOid][name] = (oid, subtype, maxaccess)
-        self.tableRows[name] = {'data' : (oid, subtype, maxaccess)}
+        self.tables[parentOid][name] = None
+        indexColumn, a ,b = index
+        indexColumn = indexColumn[indexColumn.find('('):indexColumn.rfind(')') + 1]
+        tempVal, mibname, indexColumn = ast.literal_eval(indexColumn)
+        tempDict = self.getDictionary(name, syntax,units,maxaccess, description, augmention, index, defval,oid, subtype)
+        self.tableRows[name] = {'data' : tempDict, 'index':indexColumn}
         self.tableRows[name] = {'columns':[]}
         return ''
         
-    def genTableColumnCode(self, name, oid, subtype, maxaccess):
+    def genTableColumnCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
         oidStr, parentOid = oid
-        self.tableRows[parentOid]['columns'].append((name, oid, subtype, maxaccess))
+        tempDict = self.getDictionary(name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype)
+        self.tableRows[parentOid]['columns'].append(tempDict)
         return ''
+        
+    def getDictionary(self, name, syntax, units, maxaccess, description, augmention, index,defval,oid,subtype):
+        return {'name':name,
+                'syntax':syntax,
+                'units':units,
+                'maxaccess':maxaccess,
+                'description':description,
+                'augmention':augmention,
+                'index':index,
+                'defval':defval,
+                'oid':oid,
+                'subtype':subtype}
 
     codeGenClassTable = { 'MibScalar':genScalarCode,
                          'MibTable':genTableCode,
@@ -1142,22 +1163,60 @@ class NetSnmpCodeGen(AbstractCodeGen):
             out = '//\n// Net-SNMP MIB module %s (http://pysnmp.sf.net)\n' % self.moduleName[0] + out
         debug.logger & debug.flagCodegen and debug.logger('canonical MIB name %s (%s), imported MIB(s) %s, C code size %s bytes' % (self.moduleName[0], moduleOid, ','.join(importedModules) or '<none>', len(out)))
         self.genCFile(self.moduleName[0].replace('-','_'),out)
+        self.genCTableFiles(self.moduleName[0].replace('-','_'))
         self.genHeaderFile(self.moduleName[0].replace('-','_'))
         return MibInfo(oid=None, name=self.moduleName[0], imported=tuple([ x for x in importedModules if x not in fakeMibs])), out
 
     def genCFile(self, moduleName, data):
-        self.fileWriter.fileWrite(fileName=moduleName+'.c',data=data)
+        self.fileWriter.fileWrite(fileName=moduleName + '.c',data=data)
 
-    def genCTableFile(self, moduleName, data):
-
+    def genCTableFiles(self, moduleName):
+        for key in self.tables.keys():
+            tableName = key
+        tableFileString = """#include <net-snmp/net-snmp-config.h>
+#include <net-snmp/net-snmp-features.h>
+#include <net-snmp/net-snmp-includes.h>
+#include <net-snmp/agent/net-snmp-agent-includes.h>
+#include <net-snmp/agent/mib-modules.h>
+"""
+        tableFileString += '#include '+tableName+ '.h\n'
+        tableFileString += '#include '+tableName+ '_interface.h\n'
+        tableFileString += 'const oid '+tableName+'_oid[] = {'+tableName.upper()+'_OID };\n'
+        tableFileString += 'const int '+tableName+'_oid_size = OID_LENGTH('+tableName+'_oid);\n'
+        tableFileString += tableName+'_registration ' + tableName+'_user_context;\n'
+        tableFileString += 'void initialize_table_'+tableName+'(void);\n'
+        tableFileString += 'void shutdown_table_'+tableName+'(void);\n'
+        tableFileString += 'void init_'+tableName+'(void) {\n'
+        tableFileString += tableName+'_registration * user_context;\n'
+        tableFileString += 'u_long flags;\n'
+        tableFileString += 'user_context = netsnmp_create_data_list("'+tableName+'",NULL,NULL);\n'
+        tableFileString += 'flags = 0;\n'
+        tableFileString += '_'+tableName+'_initialize_interface(user_context,flags);\n'
+        tableFileString += '}\n\n'
+        tableFileString += 'shutdown_'+tableName+'(void) {\n'
+        tableFileString += '_'+tableName+'_shutdown_interface(&'+tableName+'_user_context);\n'
+        tableFileString += '}\n\n'
+        tableFileString += 'int '+tableName+'_rowreq_ctx_init('+tableName+'_rowreq_ctx *rowreq_ctx, void *user_init_ctx) {\n'
+        tableFileString += 'return MFD_SUCCESS;\n'
+        tableFileString += '}\n\n'
+        tableFileString += 'void '+tableName+'_rowreq_ctx_cleanup('+tableName+'_rowreq_ctx *rowreq_ctx) {\n'
+        tableFileString += '}\n\n'
+        tableFileString += 'int '+tableName+'_pre_request('+tableName+'_registration *user_context) {\n'
+        tableFileString += 'return MFD_SUCCESS;\n'
+        tableFileString += '}\n\n'
+        tableFileString += 'int '+tableName + '_post_request('+tableName+'_registration *user_context) {\n'
+        tableFileString += 'return MFD_SUCCESS;\n'
+        tableFileString += '}\n'
+        self.fileWriter.fileWrite(fileName=tableName+'.c',data=tableFileString)
+        return
 
     def genHeaderFile(self, moduleName):
-        headerString = '#ifndef ' + moduleName +'_H\n'
+        headerString = '#ifndef ' + moduleName + '_H\n'
         headerString += '#define ' + moduleName + '_H\n'
         headerString += 'void register_' + moduleName + '(void);\n'
-        headerString += 'void unregister_'+moduleName + '(void);\n'
+        headerString += 'void unregister_' + moduleName + '(void);\n'
         headerString += '#endif'
-        self.fileWriter.fileWrite(fileName=moduleName+'.h',data=headerString)
+        self.fileWriter.fileWrite(fileName=moduleName + '.h',data=headerString)
 
     def genIndex(self, mibsMap, **kwargs):
         out = '\nfrom pysnmp.proto.rfc1902 import ObjectName\n\noidToMibMap = {\n'
