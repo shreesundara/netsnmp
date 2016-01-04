@@ -284,7 +284,6 @@ class MibCompiler(object):
         #
         # Generate code for parsed MIBs
         #
-
         for mibname in [originalMib]:
             fileInfo, mibInfo, mibTree = parsedMibs[mibname]
 
