@@ -1,5 +1,6 @@
 import sys
 import ast
+import json
 from time import strptime, strftime
 from keyword import iskeyword
 from pysmi.mibinfo import MibInfo
@@ -75,7 +76,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                      'Gauge32', # bug in some IETF MIBs (e.g.  DSA-MIB)
                      'MODULE-IDENTITY', 'OBJECT-TYPE', 'OBJECT-IDENTITY', 'Unsigned32', 'IpAddress', # XXX
                      'MibIdentifier'), # OBJECT IDENTIFIER
-      'SNMPv2-TC': ('DisplayString', 'TEXTUAL-CONVENTION',), # XXX
+      'SNMPv2-TC': ('DisplayString', 'TimeStamp', 'TruthValue', 'TEXTUAL-CONVENTION',), # XXX
       'SNMPv2-CONF': ('MODULE-COMPLIANCE', 'NOTIFICATION-GROUP',), # XXX
     }
 
@@ -335,19 +336,19 @@ class NetSnmpCodeGen(AbstractCodeGen):
         'Integer32': 'long',
         'TimeTicks': 'long',
         'OctetString': 'char *',
-        'DisplayString': 'char *',
         'ObjectIdentifier':'oid',
-        'ZeroBaseCounter32':'u_long',
-        'Counter32': 'u_long'
+        'Guage32':'u_long',
+        'Counter32': 'u_long',
+        'Bits' : 'char'
     }
 
     netsnmpTypes = { 'Integer32':'ASN_INTEGER',
                     'TimeTicks':'ASN_TIMETICKS',
                     'OctetString':'ASN_OCTET_STR',
-                    'DisplayString':'ASN_OCTET_STR',
                     'ObjectIdentifier':'ASN_OBJECT_ID',
-                    'ZeroBasedCounter32':'u_long',
-                    'Counter32':'u_long'
+                    'Guage32':'ASN_GUAGE',
+                    'Counter32':'ASN_COUNTER',
+                    'Bits':'ASN_BITS',
                     }
 
     smiv1IdxTypes = ['INTEGER', 'OCTET STRING', 'IPADDRESS', 'NETWORKADDRESS']
@@ -374,6 +375,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
         self.tableRows = {}
         self.fileWriter = fileWriter
         self.customTypes = {}
+        self.parsedMibs = {}
+        self.jsonData = None
 
     def symTrans(self, symbol):
         if symbol in self.symsTable:
@@ -419,6 +422,20 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 data.append(self.handlersTable[el[0]](self, self.prepData(el[1:], classmode=classmode), classmode=classmode))
         return data
 
+    def getTypeFromSymbolTable(self, sym):
+        for mod in self.symbolTable:
+            if sym in self.symbolTable[mod]:
+                return self.symbolTable[mod][sym]['syntax'][0][0]
+        return ''
+
+    def getBaseTypeFromSymbolTable(self,mod,sym):
+        baseType = self.symbolTable[mod][sym]['syntax'][0][0]
+        if baseType is 'MibTable' or baseType is 'MibTableRow' or baseType is 'MibTableColumn':
+            return None
+        while baseType not in self.ctypeClasses:
+            baseType = self.getTypeFromSymbolTable(baseType)
+        return baseType
+
     def genImports(self, imports):
         outStr = ''
         # convertion to SNMPv2
@@ -444,10 +461,20 @@ class NetSnmpCodeGen(AbstractCodeGen):
             else:
                 imports[module] = self.constImports[module]
         for module in sorted(imports):
+            #if module in baseMibs and 'SNMPv2-TC' not in module:
+            #    continue
             symbols = ()
             for symbol in set(imports[module]):
                 symbols += self.symTrans(symbol)
             if symbols:
+                for s in symbols:
+                    if module not in self.symbolTable:
+                        continue
+                    if s not in self.symbolTable[module]:
+                        continue
+                    importType = self.getBaseTypeFromSymbolTable(module,s)
+                    if importType:
+                        self.customTypes[s] = {'baseType':importType}
                 self._presentedSyms = self._presentedSyms.union([self.transOpers(s) for s in symbols])
                 self._importMap.update([(self.transOpers(s), module) for s in symbols])
                 # outStr += '( %s, ) = mibBuilder.importSymbols("%s")\n' % \
@@ -477,11 +504,11 @@ class NetSnmpCodeGen(AbstractCodeGen):
         self._exports.add('%s=%s' % (symbol, symbol))
         self._presentedSyms.add(symbol)
 
-    def regSym(self, symbol, outStr, parentOid=None, moduleIdentity=0):
+    def regSym(self, symbol, outDict, parentOid=None, moduleIdentity=0):
         if symbol in self._presentedSyms and symbol not in self._importMap:
             raise error.PySmiSemanticError('Duplicate symbol found: %s' % symbol)
         self.addToExports(symbol, moduleIdentity)
-        self._out[symbol] = outStr
+        self._out[symbol] = outDict
 
     def genNumericOid(self, oid):
         numericOid = []
@@ -540,6 +567,13 @@ class NetSnmpCodeGen(AbstractCodeGen):
         name = self.transOpers(name)
         oidStr, parentOid = oid
         revisions = revisions and revisions or ''
+        outDict = {}
+        outDict['LAST-UPDATED'] = lastUpdated
+        outDict['ORGANIZATION'] = organization
+        outDict['CONTACT-INFO'] = contactInfo
+        outDict['DESCRIPTION'] = description
+        outDict['Revisions'] = revisions
+        outDict['objectIdentifier'] = oid
         outStr = name + ' = ModuleIdentity(' + oidStr + ')' + label + revisions + '\n'
         if self.genRules['text']:
             outStr += self.ifTextStr + name + lastUpdated + '\n'
@@ -547,8 +581,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
             outStr += self.ifTextStr + name + contactInfo + '\n'
             outStr += self.ifTextStr + name + description + '\n'
         outStr = '//' + name + ' genModuleIdentity\n'
-        self.regSym(name, outStr, parentOid, moduleIdentity=1)
-        return outStr
+        self.regSym(name, outDict, parentOid, moduleIdentity=1)
+        return outDict
 
     def genModuleCompliance(self, data, classmode=0):
         name, description, compliances, oid = data
@@ -626,19 +660,45 @@ class NetSnmpCodeGen(AbstractCodeGen):
         self.regSym(name, outStr, parentOid)
         return outStr
 
+    def getTypeFromSyntax(self, syntax):
+        ret = ''
+        if 'SimpleSyntax' in syntax:
+            ret = syntax['SimpleSyntax']['objType']
+        return ret
+
+    def getSubTypeFromSyntax(self, syntax):
+        ret = ''
+        if 'SimpleSyntax' in syntax:
+            ret = syntax['SimpleSyntax']['subType']
+        return ret
+
     def genObjectType(self, data, classmode=0):
         name, syntax, units, maxaccess, description, augmention, index, defval, oid = data
+        outDict = {}
         label = self.genLabel(name)
         name = self.transOpers(name)
+        outDict['name'] = name
+        outDict['syntax'] = syntax
+        outDict['UNITS'] = units
+        outDict['MaxAccessPart'] = maxaccess
+        outDict['DESCRIPTION'] = description
+        outDict['augmention'] = augmention
+        outDict['INDEX'] = index 
+        outDict['objectIdentifier'] = oid
         oidStr, parentOid = oid
         indexStr, fakeStrlist, fakeSyms = index and index or ('', '', [])
-        subtype = syntax[0] == 'Bits' and 'Bits()' + syntax[1] or \
-                                          syntax[1] # Bits hack #1
-        classtype = self.typeClasses.get(syntax[0], syntax[0])
-        classtype = self.transOpers(classtype)
-        classtype = syntax[0] == 'Bits' and 'MibScalar' or classtype # Bits hack #2
-        classtype = name in self.symbolTable[self.moduleName[0]]['_symtable_cols'] and 'MibTableColumn' or classtype
+        classtype = self.getTypeFromSyntax(syntax)
+        #subtype = syntax[0] == 'Bits' and 'Bits()' + syntax[1] or \
+        #                                  syntax[1] # Bits hack #1
+        #classtype = self.typeClasses.get(syntax[0], syntax[0])
+        #classtype = self.transOpers(classtype)
+        #classtype = syntax[0] == 'Bits' and 'MibScalar' or classtype # Bits
+        #hack #2
+        #classtype = name in
+        #self.symbolTable[self.moduleName[0]]['_symtable_cols'] and
+        #'MibTableColumn' or classtype
         defval = self.genDefVal(defval, objname=name)
+        outDict['DEFVAL'] = defval
         outStr = ''
         #outStr = name + ' = ' + classtype + '(' + oidStr + ', ' + subtype + \
         #         (defval and defval or '') + ')' + label
@@ -655,8 +715,16 @@ class NetSnmpCodeGen(AbstractCodeGen):
         #    '.getIndexNames())\n'
         #if self.genRules['text'] and description:
         #    outStr += self.ifTextStr + name + description + '\n'
-        outStr = self.codeGenClassTable[classtype](self, name,syntax, units,maxaccess, description, augmention, index, defval, oid, subtype)
-        self.regSym(name, outStr, parentOid)
+        if 'SimpleSyntax' in syntax or 'Bits' in syntax:
+            if name in self.symbolTable[self.moduleName[0]]['_symtable_cols']:
+                outStr = self.genTableColumnCode(name, syntax,units,maxaccess,description,augmention,index,defval,oid)
+            else:
+                outStr = self.genScalarCode(name,syntax, units,maxaccess, description, augmention, index, defval, oid)
+        elif 'conceptualTable' in syntax:
+            outStr = self.genTableCode(name, syntax,units,maxaccess,description,augmention,index,defval,oid)
+        elif 'row' in syntax:
+            outStr = self.genTableRowCode(name,syntax,units,maxaccess,description,augmention,index,defval,oid)
+        self.regSym(name, outDict, parentOid)
         if fakeSyms: # fake symbols for INDEX to support SMIv1
             for i in range(len(fakeSyms)):
                 fakeOutStr = fakeStrlist[i] % oidStr
@@ -683,15 +751,22 @@ class NetSnmpCodeGen(AbstractCodeGen):
 
     def genTypeDeclaration(self, data, classmode=0):
         outStr = ''
+        outDict = {}
         name, declaration = data
         if declaration:
-            parentType, attrs = declaration
-            if parentType: # skipping SEQUENCE case
+            if not declaration[0] or 'SEQUENCE' not in declaration[0]:
+                parentType, attrs = declaration
+                #if parentType: # skipping SEQUENCE case
                 name = self.transOpers(name)
-                outStr = 'class ' + name + '(' + parentType + '):\n' + attrs + '\n'
-                baseType = parentType[:parentType.find(',')]
-                self.customTypes[name] = {'baseType':baseType}
-                self.regSym(name, outStr)
+                #outStr = 'class ' + name + '(' + parentType + '):\n' +
+                #attrs + '\n'
+                #baseType = parentType[:parentType.find(',')]
+                if 'SimpleSyntax' in attrs:
+                    self.customTypes[name] = {'baseType':attrs['SimpleSyntax']['objType']}
+                elif 'Bits' in attrs:
+                    self.customTypes[name] = {'baseType':'Bits'}
+                outDict = attrs
+                self.regSym(name, outDict)
         outStr = '//' + name + ' genTypeDeclaration'
         return outStr
 
@@ -700,10 +775,12 @@ class NetSnmpCodeGen(AbstractCodeGen):
         label = self.genLabel(name)
         name = self.transOpers(name)
         oidStr, parentOid = oid
+        outDict = {}
+        outDict['objectIdentifier'] = oid
         outStr = name + ' = MibIdentifier(' + oidStr + ')' + label + '\n'
         outStr = '//' + name + ' genValueDeclaration\n'
-        self.regSym(name, outStr, parentOid)
-        return outStr
+        self.regSym(name, outDict, parentOid)
+        return outDict
 
 ### Subparts generation functions
     def genBitNames(self, data, classmode=0):
@@ -721,7 +798,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr = classmode and \
           self.indent + 'namedValues = ' + funcCalls + '\n' or \
           '.clone(namedValues=' + funcCalls + ')'
-        return 'Bits', outStr
+        outDict = {}
+        return {'Bits': outDict}
 
     def genCompliances(self, data, classmode=0):
         complStr = ''
@@ -733,11 +811,11 @@ class NetSnmpCodeGen(AbstractCodeGen):
         return '.setObjects(*(' + complStr + '))'
 
     def genConceptualTable(self, data, classmode=0):
-        row = data[0]
+        row = data[0]['row']
         if row[1] and row[1][-2:] == '()':
             row = row[1][:-2]
             self._rows.add(row)
-        return 'MibTable', ''
+        return {'conceptualTable':row }
 
     def genContactInfo(self, data, classmode=0):
         text = data[0]
@@ -805,22 +883,25 @@ class NetSnmpCodeGen(AbstractCodeGen):
 
     def genEnumSpec(self, data, classmode=0):
         items = data[0]
-        singleval = [str(item[1]) + ',' for item in items]
-        outStr = classmode and self.indent + 'subtypeSpec = %s.subtypeSpec+' or '.subtype(subtypeSpec='
-        numFuncCalls = len(singleval) / 255 + 1
-        singleCall = numFuncCalls == 1 or False
-        funcCalls = ''
-        outStr += not singleCall and 'ConstraintsUnion(' or ''
-        for i in range(int(numFuncCalls)):
-            funcCalls += 'SingleValueConstraint(' + \
-                              ' '.join(singleval[255 * i:255 * (i + 1)]) + '), '
-        funcCalls = funcCalls[:-2]
-        outStr += funcCalls
-        outStr += not singleCall and \
-                  (classmode and ')\n' or '))') or \
-                  (not classmode and ')' or '\n')
-        outStr += self.genBits(data, classmode=classmode)[1]
-        return outStr
+        return {'enumSpec':items}
+        # singleval = [str(item[1]) + ',' for item in items]
+        # outStr = classmode and self.indent + 'subtypeSpec = %s.subtypeSpec+'
+        # or '.subtype(subtypeSpec='
+        # numFuncCalls = len(singleval) / 255 + 1
+        # singleCall = numFuncCalls == 1 or False
+        # funcCalls = ''
+        # outStr += not singleCall and 'ConstraintsUnion(' or ''
+        # for i in range(int(numFuncCalls)):
+        #     funcCalls += 'SingleValueConstraint(' + \
+        #                       ' '.join(singleval[255 * i:255 * (i + 1)]) +
+        #                       '), '
+        # funcCalls = funcCalls[:-2]
+        # outStr += funcCalls
+        # outStr += not singleCall and \
+        #           (classmode and ')\n' or '))') or \
+        #           (not classmode and ')' or '\n')
+        # outStr += self.genBits(data, classmode=classmode)[1]
+        # return {'enumSpec':items}
 
     def genTableIndex(self, data, classmode=0):
         def genFakeSyms(fakeidx, idxType):
@@ -847,6 +928,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         return '.setIndexNames(' + ', '.join(idxStrlist) + ')', fakeStrlist, fakeSyms
 
     def genIntegerSubType(self, data, classmode=0):
+        outDict = {}
         singleRange = len(data[0]) == 1 or False
         outStr = classmode and self.indent + 'subtypeSpec = %s.subtypeSpec+' or \
                                '.subtype(subtypeSpec='
@@ -854,19 +936,20 @@ class NetSnmpCodeGen(AbstractCodeGen):
         for rng in data[0]:
             vmin, vmax = len(rng) == 1 and (rng[0], rng[0]) or rng
             vmin, vmax = str(self.str2int(vmin)), str(self.str2int(vmax))
+            outDict['ValueRangeConstraint'] = (vmin, vmax)
             outStr += 'ValueRangeConstraint(' + vmin + ',' + vmax + ')' + \
                       (not singleRange and ',' or '')
         outStr += not singleRange and \
                   (classmode and ')' or '))') or \
                   (not classmode and ')' or '\n')
-        return outStr
+        return {'integerSubType':outDict}
 
     def genMaxAccess(self, data, classmode=0):
         access = data[0].replace('-', '')
         return access != 'notaccessible' and '.setMaxAccess("' + access + '")' or ''
 
     def genOctetStringSubType(self, data, classmode=0):
-        out = {}
+        outDict = {}
         singleRange = len(data[0]) == 1 or False
         outStr = classmode and self.indent + 'subtypeSpec = %s.subtypeSpec+' or \
                                '.subtype(subtypeSpec='
@@ -874,7 +957,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         for rng in data[0]:
             vmin, vmax = len(rng) == 1 and (rng[0], rng[0]) or rng
             vmin, vmax = str(self.str2int(vmin)), str(self.str2int(vmax))
-            out['ValueSizeConstraint'] = (vmin, vmax)
+            outDict['ValueSizeConstraint'] = (vmin, vmax)
             outStr += 'ValueSizeConstraint(' + vmin + ',' + vmax + ')' + \
                       (not singleRange and ',' or '')
         outStr += not singleRange and \
@@ -882,7 +965,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                   (not classmode and ')' or '\n')
         outStr += singleRange and vmin == vmax and \
                   (classmode and self.indent + 'fixedLength = ' + vmin + '\n' or '.setFixedLength(' + vmin + ')') or ''
-        return outStr
+        return {'octetStringSubType':outDict}
 
     def genOid(self, data, classmode=0):
         out = []
@@ -938,35 +1021,45 @@ class NetSnmpCodeGen(AbstractCodeGen):
     def genRow(self, data, classmode=0):
         row = data[0]
         row = self.transOpers(row)
-        return row in self.symbolTable[self.moduleName[0]]['_symtable_rows'] and ('MibTableRow', '') or self.genSimpleSyntax(data, classmode=classmode)
+        # return row in self.symbolTable[self.moduleName[0]]['_symtable_rows']
+        # and ('MibTableRow', '') or self.genSimpleSyntax(data,
+        # classmode=classmode)
+        if row in self.symbolTable[self.moduleName[0]]['_symtable_rows']:
+            return {'row':row}
+        return self.genSimpleSyntax(data, classmode=classmode)
 
     def genSequence(self, data, classmode=0):
         cols = data[0]
         self._cols.update(cols)
-        return '', ''
+        return {'SEQUENCE':cols}
 
     def genSimpleSyntax(self, data, classmode=0):
         objType = data[0]
         objType = self.typeClasses.get(objType, objType)
         objType = self.transOpers(objType)
+        outDict = {'objType':objType,'subType':{}}
         subtype = len(data) == 2 and data[1] or ''
+        if subtype is not '':
+            outDict['subType'] = subtype
         if classmode:
             subtype = '%s' in subtype and subtype % objType or subtype # XXX hack?
-            return objType, subtype
+            outDict['subType'] = subtype
+            return {'SimpleSyntax':outDict}
         out = [objType, subtype]
-        return 'MibScalar', out
+        return {'SimpleSyntax':outDict}
 
     def genTypeDeclarationRHS(self, data, classmode=0):
-        if len(data) == 1:
-            parentType, attrs = data[0] # just syntax
-        else:
-            # Textual convention
-            display, syntax = data
-            parentType, attrs = syntax
-            parentType = parentType + ', TextualConvention'
-            attrs = (display and display or '') + attrs
-        attrs = attrs or self.indent + 'pass\n'
-        return parentType, attrs
+        return data
+        # if len(data) == 1:
+        #     parentType, attrs = data[0] # just syntax
+        # else:
+        #     # Textual convention
+        #     display, syntax = data
+        #     parentType, attrs = syntax
+        #     parentType = parentType + ', TextualConvention'
+        #     attrs = (display and display or '') + attrs
+        # attrs = attrs or self.indent + 'pass\n'
+        # return parentType, attrs
 
     def genUnits(self, data, classmode=0):
         text = data[0]
@@ -1015,17 +1108,19 @@ class NetSnmpCodeGen(AbstractCodeGen):
     }
     
     def genRegisterUnregister(self, moduleName):
-        outStr = 'void register_' + moduleName + '(void) {\n'
+        outStr = 'void snmp_init(void) {\n'
         for codeSym in self.codeSymbols:
-            outStr += 'register_' + codeSym + '();\n'
+            name, tempStr = codeSym.items()[0]
+            outStr += 'init_' + name+ '();\n'
         outStr += '}\n'
-        outStr += 'void unregister_' + moduleName + '(void) {\n'
+        outStr += 'void snmp_shutdown(void) {\n'
         for codeSym in self.codeSymbols:
-            outStr += 'unregister_' + codeSym + '();\n'
+            name, tempStr = codeSym.items()[0]
+            outStr += 'shutdown_' + name + '();\n'
         outStr += '}\n'
         return outStr
 
-    def genIntCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
+    def genIntCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
         outStr = 'static int netsnmp_' + name + ' = 42;\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
         outStr += 'void register_' + name + '(void) {\n'
@@ -1034,13 +1129,19 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += '}\n\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
         outStr += 'if(reqinfo->mode == MODE_GET) {\n'
+        jsonValue = self.jsonData[name]
+        if not jsonValue['OvsTable']:
+            outStr += ''
+        else:
+            outStr += 'const ovsrec_' + jsonValue['OvsTable'] + ' *' + jsonValue['OvsTable'] + '_row = ovsrec_' + jsonValue['OvsTable'] + '_first(idl);\n'
+            outStr += 'netsnmp_' + name + ' = ovsdb_get_' + name + '(idl, ' + jsonValue['OvsTable'] + '_row);\n'
         outStr += 'snmp_set_var_typed_value(requests->requestvb, ASN_INTEGER, &netsnmp_' + name + ', sizeof(netsnmp_' + name + '));\n'
         outStr += '}\n'
         outStr += 'return SNMP_ERR_NOERROR;\n'
         outStr += '}\n\n'
         return outStr
 
-    def genTimeTicksCode(self, name, syntax, units, maxaccess,description, augmention, index, defval,oid, subtype):
+    def genTimeTicksCode(self, name, syntax, units, maxaccess,description, augmention, index, defval,oid):
         outStr = 'static unsigned long netsnmp_' + name + ' = 42;\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
         outStr += 'void register_' + name + '(void) {\n'
@@ -1055,8 +1156,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += '}\n\n'
         return outStr
 
-    def genStringCode(self, name, syntax, units, maxaccess, description, augmention, index, defval,oid, subtype):
-        minConstraint, maxConstraint = subtype[1].get('ValueSizeConstraint',(0,0))
+    def genStringCode(self, name, syntax, units, maxaccess, description, augmention, index, defval,oid):
+        minConstraint, maxConstraint = syntax['SimpleSyntax']['subType'].get('ValueSizeConstraint',(0,0))
         if maxConstraint == 0:
             stringLength = 256
         else:
@@ -1078,7 +1179,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += '}\n\n'
         return outStr
 
-    def genOidCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
+    def genOidCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
         outStr = 'static oid netsnmp_' + name + '[MAX_OID_LEN] = { 0 };\n'
         outStr += 'static int netsnmp_' + name + '_byte_length = 1;\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
@@ -1094,7 +1195,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += '}\n\n'
         return outStr
 
-    def genZeroCounterCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
+    def genGuageCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
         outStr = 'static u_long netsnmp_' + name + ' = 0 ;\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
         outStr += 'void register_' + name + '(void) {\n'
@@ -1109,7 +1210,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += '}\n\n'
         return outStr
 
-    def genCounterCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
+    def genCounterCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
         outStr = 'static u_long netsnmp_' + name + ' = 0;\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
         outStr += 'void register_' + name + '(void) {\n'
@@ -1124,57 +1225,89 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += '}\n\n'
         return outStr
 
+    def genBitsCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
+        return ''
+
     codeGenTable = { 'Integer32':genIntCode,
                    'TimeTicks': genTimeTicksCode,
                    'OctetString':genStringCode,
-                   'DisplayString':genStringCode,
                    'ObjectIdentifier': genOidCode,
-                   'ZeroBasedCounter32':genZeroCounterCode,
-                   'Counter32':genCounterCode }
+                   'Guage32':genGuageCode,
+                   'Counter32':genCounterCode,
+                   'Bits': genBitsCode}
 
-    def getSubTypeString(self, subtype):
+    def getObjTypeString(self, syntax):
         ret = ''
-        if type(subtype) is str:
-            return 'Integer32'
-        if subtype[0] in self.customTypes:
-            ret = self.customTypes[subtype[0]]['baseType']
+        if 'Bits' in syntax:
+            return 'Bits'
+        objType = syntax['SimpleSyntax']['objType']
+        if objType in self.customTypes:
+            ret = self.customTypes[objType]['baseType']
         else:
-            ret = subtype[0] 
-        if 'SnmpAdminString' in ret:
-            return 'OctetString'
-        if 'Bits' in ret:
-            return 'Integer32'
-        if 'TimeFilter' in ret:
-            return 'Integer32'
-        if 'TruthValue' in ret:
-            return 'Integer32'
-        if ret.encode('ascii','ignore') is 'B':
-            return 'Integer32'
+            ret = objType
         return ret
         
-    def genScalarCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
-        self.codeSymbols.append(name)
+    def genScalarCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
+        if name not in self.jsonData:
+            return ''
         oidStr, parendOid = oid
-        try:
-            if subtype[0] in self.customTypes:
-                baseType = self.customTypes[subtype[0]]['baseType']
-                outStr = self.codeGenTable[baseType](self, name,syntax,units,maxaccess,description,augmention,index,defval,oid,['',''])
+        objType = syntax['SimpleSyntax']['objType']
+        #try:
+        baseType = objType
+        if objType in self.customTypes:
+            baseType = self.customTypes[objType]['baseType']
+            #outStr = self.codeGenTable[baseType](self, name,syntax,units,maxaccess,description,augmention,index,defval,oid)
+        #else:
+        #    baseType = objType
+        #    outStr = self.codeGenTable[baseType](self,name, syntax, units, maxaccess, description, augmention, index, defval, oidStr)
+        #except Exception as ex:
+        #    print ex.message
+        #    outStr = ''
+        outStr = 'static '
+        if self.getObjTypeString(syntax) == 'OctetString':
+            minConstraint, maxConstraint = syntax['SimpleSyntax']['subType'].get('ValueSizeConstraint',(0,0))
+            if maxConstraint == 0:
+                stringLength = 256
             else:
-                outStr = self.codeGenTable[subtype[0]](self,name, syntax, units, maxaccess, description, augmention, index, defval, oidStr,subtype)
-        except Exception as ex:
-            print ex.message
-            outStr = ''
+                if minConstraint == 0:
+                    stringLength = maxConstraint + 1
+                else:
+                    stringLength = maxConstraint
+            outStr += 'char netsnmp_'+name+'['+str(stringLength)+'] = "Avinash";\n'
+        elif self.getObjTypeString(syntax) == 'ObjectIdentifier':
+            outStr += 'oid netsnmp_'+name+'[MAX_OID_LEN] = {0};\n'
+            outStr += 'static int netsnmp_'+name+'_byte_length = 1;\n'
+        else:
+            outStr += self.ctypeClasses[self.getObjTypeString(syntax)] +' netsnmp_'+name+' = NULL;\n'
+        outStr += 'int handler_'+name+'(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
+        outStr += 'void init_' + name+'(void) {\n'
+        outStr += 'const oid ' +name+'_oid[] = ' + str(oidStr).replace('[', '{').replace(']','}') + ';\n'
+        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("'+name+'", handler_'+name+',' +name+'_oid, OID_LENGTH('+name+'_oid), HANDLER_CAN_RWRITE));\n'
+        outStr += '}\n\n'
+        outStr += 'int handler_'+name+'(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
+        outStr += 'if(reqinfo->mode == MODE_GET) {\n'
+        jsonValue = self.jsonData[name]
+        if not jsonValue['OvsTable']:
+            outStr += ''
+        else:
+            outStr += 'const ovsrec_' + jsonValue['OvsTable'] + ' *' + jsonValue['OvsTable'] + '_row = ovsrec_'+jsonValue['OvsTable'] +'_first(idl);\n'
+            outStr += 'netsnmp_'+name+' = ovsdb_get_' +name+'(idl, '+jsonValue['OvsTable']+'_row);\n'
+        outStr += 'snmp_set_var_typed_value(requests->requestvb, '+ self.netsnmpTypes[self.getObjTypeString(syntax)]+', &netsnmp_'+name+', sizeof(netsnmp_'+name+'));\n'
+        outStr += '}\n'
+        outStr += 'return SNMP_ERR_NOERROR;\n'
+        outStr += '}\n\n'
+        self.codeSymbols.append({name:outStr})
         return outStr
         
-    def genTableCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
-        tempDict = self.getDictionary(name, syntax, units, maxaccess,description, augmention,index, defval,oid, subtype)
+    def genTableCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
+        tempDict = self.getDictionary(name, syntax, units, maxaccess,description, augmention,index, defval,oid)
         self.tables[name] = {'data': tempDict}
         return ''
         
-    def genTableRowCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
+    def genTableRowCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
         oidStr, parentOid = oid
         self.tables[parentOid]['row'] = name
-        tempDict = self.getDictionary(name, syntax,units,maxaccess, description, augmention, index, defval,oid, subtype)
+        tempDict = self.getDictionary(name, syntax,units,maxaccess, description, augmention, index, defval,oid)
         self.tableRows[name] = {'data' : tempDict}
         self.tableRows[name]['index'] = []
         indexColumn = ''
@@ -1189,19 +1322,16 @@ class NetSnmpCodeGen(AbstractCodeGen):
             for x in tempArray:
                 tempVal, mibname, indexColumn = x
                 self.tableRows[name]['index'].append(indexColumn)
-        elif augmention is not None:
-            indexColumn = augmention
-            self.tableRows[name]['index'].append(indexColumn)
         self.tableRows[name]['columns'] = []
         return ''
         
-    def genTableColumnCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype):
+    def genTableColumnCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
         oidStr, parentOid = oid
-        tempDict = self.getDictionary(name, syntax, units, maxaccess, description, augmention, index, defval, oid, subtype)
+        tempDict = self.getDictionary(name, syntax, units, maxaccess, description, augmention, index, defval, oid)
         self.tableRows[parentOid]['columns'].append(tempDict)
         return ''
         
-    def getDictionary(self, name, syntax, units, maxaccess, description, augmention, index,defval,oid,subtype):
+    def getDictionary(self, name, syntax, units, maxaccess, description, augmention, index,defval,oid):
         return {'name':name,
                 'syntax':syntax,
                 'units':units,
@@ -1210,8 +1340,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 'augmention':augmention,
                 'index':index,
                 'defval':defval,
-                'oid':oid,
-                'subtype':subtype}
+                'oid':oid}
 
     codeGenClassTable = { 'MibScalar':genScalarCode,
                          'MibTable':genTableCode,
@@ -1220,6 +1349,9 @@ class NetSnmpCodeGen(AbstractCodeGen):
     
     def genCode(self, ast, symbolTable, **kwargs):
         self.genRules['text'] = kwargs.get('genTexts', False)
+        self.parsedMibs = kwargs.get('parsedMibs', {})
+        with open('test_json.json') as data_file:
+            self.jsonData = json.load(data_file)
         self.symbolTable = symbolTable
         out = ''
         importedModules = ()
@@ -1236,12 +1368,21 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 clausetype = declr[0]
                 classmode = clausetype == 'typeDeclaration'
                 self.handlersTable[declr[0]](self, self.prepData(declr[1:], classmode), classmode)
-        for sym in self.symbolTable[self.moduleName[0]]['_symtable_order']:
+        #for importAst in [x[2] for x in self.parsedMibs.items()]:
+        #    tempModuleName, tempModuleOid, tempImports, tempDeclarations = importAst
+        #    if tempModuleName in baseMibs:
+        #        continue
+        #    for declr in tempDeclarations and tempDeclarations or []:
+        #        if declr:
+        #            clausetype = declr[0]
+        #            classmode = clausetype == 'typeDeclaration'
+        #            self.handlersTable[declr[0]](self, self.prepData(declr[1:], classmode), classmode)
+        #for sym in self.symbolTable[self.moduleName[0]]['_symtable_order']:
             # if sym not in self._out:
             #     raise error.PySmiCodegenError('No generated code for symbol
             #     %s' % sym)
-            if sym in self.codeSymbols:
-                out += self._out[sym]
+            #if sym in self.codeSymbols:
+            #    out += self._out[sym]
         # out += self.genExports()
         out += self.genRegisterUnregister(self.moduleName[0].replace('-','_'))
         out = self.headers + '#include "' + self.moduleName[0].replace('-','_') + '.h"\n' + out
@@ -1255,16 +1396,141 @@ class NetSnmpCodeGen(AbstractCodeGen):
         return MibInfo(oid=None, name=self.moduleName[0], imported=tuple([ x for x in importedModules if x not in fakeMibs])), out
 
     def genCFile(self, moduleName, data):
+        for sym in self.codeSymbols:
+            name, outStr = sym.items()[0]
+            data += outStr
         self.fileWriter.fileWrite(fileName=moduleName + '.c',data=data)
+
+        scalarOvsdbGetString = """#include "openswitch-idl.h"
+#include "ovsdb-idl.h"
+#include "vswitch-idl.h"
+#include "openvswitch/vlog.h"
+"""
+        scalarOvsdbGetString += '#include "' + moduleName + '_ovsdb_get.h"\n\n'
+        for sym in self.codeSymbols:
+            name, outStr = sym.items()[0]
+            scalar = self._out[name]
+            scalarJson = self.jsonData[name]
+            if not scalarJson['OvsTable']:
+                scalarOvsdbGetString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'] )]+ ' ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl) {\n'
+                scalarOvsdbGetString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ' temp = NULL;\n'
+                scalarOvsdbGetString += 'return temp;\n'
+                scalarOvsdbGetString += '}\n\n'
+                continue
+            scalarOvsdbGetString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ' ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, const ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row) {\n'
+            scalarOvsdbGetString += 'return (' + self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ')'
+            if scalarJson['Type']['Key']:
+                scalarOvsdbGetString += 'smap_get(' + scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ', "' + scalarJson['Type']['Key'] + '");\n'
+            else:
+                scalarOvsdbGetString += scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ';\n'
+            scalarOvsdbGetString += '}\n\n'
+        self.fileWriter.fileWrite(fileName=moduleName + '_ovsdb_get.c',data=scalarOvsdbGetString)
+
+        scalarOvsdbGetHeaderString = '#ifndef ' + moduleName.upper() + '_OVSDB_GET_H\n'
+        scalarOvsdbGetHeaderString += '#define ' + moduleName.upper() + '_OVSDB_GET_H\n'
+        for sym in self.codeSymbols:
+            name, outStr = sym.items()[0]
+            scalar = self._out[name]
+            scalarJson = self.jsonData[name]
+            if not scalarJson['OvsTable']:
+                scalarOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ' ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl);\n'
+                continue
+            scalarOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ' ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, const ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row);\n'
+        scalarOvsdbGetHeaderString += '\n#endif'
+        self.fileWriter.fileWrite(fileName=moduleName + '_ovsdb_get.h', data=scalarOvsdbGetHeaderString)
+
+    def getOvsdbRowsForTable(self, tableName):
+        if tableName not in self.jsonData or self.jsonData[tableName]['MibType'] != 'Table':
+            return []
+        tables = [self.jsonData[tableName]['RootOvsTable']]
+        for col, val in self.jsonData[tableName]['Columns'].items():
+            if val['OvsTable'] and val['OvsTable'] not in tables:
+                tables.append(val['OvsTable'])
+        for idx, val in self.jsonData[tableName]['Indexes'].items():
+            if val['OvsTable'] and val['OvsTable'] not in tables:
+                tables.append(val['OvsTable'])
+        return tables
+        
+    def getOvsdbRowsStringForTable(self, tables):
+        outStr = ''
+        for tbl in tables:
+            outStr += 'const struct ovsrec_' + tbl + ' *' + tbl + '_row = NULL;\n'
+        return outStr + '\n'
+        
+    def getLocalsStringForTable(self, tableName, indexes):
+        outStr = ''
+        for idx in indexes:
+            outStr += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + ';\n' 
+        outStr += '\n'
+        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+            if col['name'] not in [idx['name'] for idx in indexes]:
+                outStr += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ' + col['name'] + ';\n'
+        return outStr + '\n'
+        
+    def getFirstIntanceStringForTable(self, tableName, tables):
+        outStr = ''
+        for tbl in tables:
+            outStr += tbl + '_row = ovsrec_' + tbl + '_first(idl);\n'
+            outStr += 'if (!' + tbl + '_row) {\n'
+            outStr += 'snmp_log(LOG_ERROR, "not able to fetch ' + tbl + ' row");\n'
+            outStr += 'return -1;\n'
+            outStr += '}\n\n'
+        return outStr
+        
+    def getForLoopStringForTable(self, tableName, indexes):
+        outStr = ''
+        table = self.jsonData[tableName]['RootOvsTable']
+        outStr += 'OVSREC_' + table.upper() + '_FOR_EACH(' + table + '_row, idl) {\n'
+        for idx in indexes:
+            idxTable = self.jsonData[tableName]['Indexes'][idx['name']]['OvsTable']
+            if idxTable and idxTable != table:
+                outStr += idx['name'] + ' = ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, ' + idxTable + '_row);\n'
+            else:
+                outStr += idx['name'] + ' = ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row);\n'
+        outStr += '\n'
+        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+            if col['name'] in [idx['name'] for idx in indexes]:
+                continue
+            colTable = self.jsonData[tableName]['Columns'][col['name']]['OvsTable']
+            if colTable and colTable != table:
+                outStr += col['name'] + ' = ovsdb_get_' + col['name'] + '(idl, ' + table + '_row, ' + colTable + '_row);\n'
+            else:
+                outStr += col['name'] + ' = ovsdb_get_' + col['name'] + '(idl, ' + table + '_row);\n'
+        outStr += '\n'
+        outStr += 'rowreq_ctx = ' + tableName + '_allocate_rowreq_ctx(NULL);\n'
+        outStr += 'if (rowreq_ctx == NULL) {\n'
+        outStr += 'snmp_log(LOG_ERR, "memory allocation failed");\n'
+        outStr += 'return MFD_RESOURCE_UNAVAILABLE;\n'
+        outStr += '}\n'
+        outStr += 'if (MFD_SUCCESS != ' + tableName + '_indexes_set( rowreq_ctx'
+        for idx in indexes:
+            outStr += ', ' + idx['name']
+        outStr += ')) {\n'
+        outStr += 'snmp_log(LOG_ERR, "error setting indexes while loading");\n'
+        outStr += tableName + '_relase_rowreq_ctx(rowreq_ctx);\n'
+        outStr += 'continue;\n'
+        outStr += '}\n\n'
+        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+            outStr += 'rowreq_ctx->data.' + col['name'] + ' = ' + col['name'] + ';\n'
+        outStr += 'CONTAINER_INSERT(container, rowreq_ctx);\n'
+        return outStr + '}\n'
 
     def genCTableFiles(self, moduleName):
         for key in self.tables.keys():
             tableName = key
             indexes = []
-            for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in self.tableRows[self.tables[tableName]['row']]['index']:
-                    indexes.append(col)
+            for col in self.tableRows[self.tables[tableName]['row']]['index']:
+                indexes.append(self._out[col])
             if len(indexes) is 0:
+                augment = self.tableRows[self.tables[tableName]['row']]['data']['augmention']
+                for col in self.tableRows[augment]['index']:
+                    indexes.append(self._out[col])
+            ovsdbTables = self.getOvsdbRowsForTable(tableName)
+            if tableName in self.jsonData:
+                if self.jsonData[tableName]['MibType'] != 'Table':
+                    raise Exception('%s is not a table',tableName)
+                rootDbTable = self.jsonData[tableName]['RootOvsTable']
+            else:
                 continue
             tableFileString = """#include <net-snmp/net-snmp-config.h>
     #include <net-snmp/net-snmp-features.h>
@@ -1323,13 +1589,11 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableFileHeaderString += 'typedef struct ' + tableName + '_data_s {\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
                 if col['name'] not in self.tableRows[self.tables[tableName]['row']]['index']:
-                    tableFileHeaderString += self.ctypeClasses[self.getSubTypeString(col['subtype'])] + ' ' + col['name'] + ';\n'
-                else:
-                    indexes.append(col)
+                    tableFileHeaderString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ' + col['name'] + ';\n'
             tableFileHeaderString += '} ' + tableName + '_data;\n\n'
             tableFileHeaderString += 'typedef struct ' + tableName + '_mib_index_s {\n'
             for idx in indexes:
-                tableFileHeaderString += self.ctypeClasses[self.getSubTypeString(idx['subtype'])] + ' ' + idx['name'] + ';\n'
+                tableFileHeaderString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + ';\n'
             tableFileHeaderString += '} ' + tableName + '_mib_index;\n\n'
             #tableFileHeaderString += '#define MAX_' + tableName+'_IDX_LEN 1'
             tableFileHeaderString += 'typedef struct ' + tableName + '_rowreq_ctx_s {\n'
@@ -1377,7 +1641,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataGetString += '#include ' + tableName + '.h\n\n'
             tableDataGetString += 'int ' + tableName + '_indexes_set_tbl_idx(' + tableName + '_mib_index *tbl_idx'
             for idx in indexes:
-               tableDataGetString += ', ' + self.ctypeClasses[self.getSubTypeString(idx['subtype'])] + ' ' + idx['name'] + '_val'
+               tableDataGetString += ', ' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + '_val'
             tableDataGetString += ') {\n'
             for idx in indexes:
                 tableDataGetString += 'tbl_idx->' + idx['name'] + ' = ' + idx['name'] + '_val;\n'
@@ -1385,7 +1649,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataGetString += '}\n\n'
             tableDataGetString += 'int ' + tableName + '_indexes_set(' + tableName + '_rowreq_ctx *rowreq_ctx'
             for idx in indexes:
-               tableDataGetString += ', ' + self.ctypeClasses[self.getSubTypeString(idx['subtype'])] + ' ' + idx['name'] + '_val'
+               tableDataGetString += ', ' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + '_val'
             tableDataGetString += ') {\n'
             tableDataGetString += 'if (MFD_SUCCESS != ' + tableName + '_indexes_set_tbl_idx(&rowreq_ctx->tbl_idx'
             for idx in indexes:
@@ -1400,7 +1664,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataGetString += 'return MFD_SUCCESS;\n'
             tableDataGetString += '}\n\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                tableDataGetString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx,' + self.ctypeClasses[self.getSubTypeString(col['subtype'])] + ' *' + col['name'] + '_val_ptr) {\n'
+                tableDataGetString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx,' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' *' + col['name'] + '_val_ptr) {\n'
                 tableDataGetString += '(*' + col['name'] + '_val_ptr) = rowreq_ctx->data.' + col['name'] + ';\n'
                 tableDataGetString += 'return MFD_SUCCESS;\n'
                 tableDataGetString += '}\n\n'
@@ -1409,13 +1673,13 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataGetHeaderString = '#ifndef ' + tableName.upper() + '_DATA_GET_H\n'
             tableDataGetHeaderString += '#define ' + tableName.upper() + '_DATA_GET_H\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx,' + self.ctypeClasses[self.getSubTypeString(col['subtype'])] + ' *' + col['name'] + '_val_ptr);\n'
+                tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx,' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' *' + col['name'] + '_val_ptr);\n'
             tableDataGetHeaderString += 'int ' + tableName + '_indexes_set_tbl_idx(' + tableName + '_mib_index *tbl_idx'
             for idx in indexes:
-                tableDataGetHeaderString += ', ' + self.ctypeClasses[self.getSubTypeString(idx['subtype'])] + ' ' + idx['name'] + '_val'
+                tableDataGetHeaderString += ', ' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + '_val'
             tableDataGetHeaderString += ');\n'
             tableDataGetHeaderString += 'int ' + tableName + '_indexes_set(' + tableName + '_rowreq_ctx *rowreq_ctx'
-            tableDataGetHeaderString += ', ' + self.ctypeClasses[self.getSubTypeString(idx['subtype'])] + ' ' + idx['name'] + '_val'
+            tableDataGetHeaderString += ', ' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + '_val'
             tableDataGetHeaderString += ');\n'
             tableDataGetHeaderString += '#endif\n'
             self.fileWriter.fileWrite(fileName=tableName + '_data_get.h',data=tableDataGetHeaderString)
@@ -1440,6 +1704,12 @@ class NetSnmpCodeGen(AbstractCodeGen):
     """
             tableDataAccessString += '#include "' + tableName + '.h"\n'
             tableDataAccessString += '#include "' + tableName + '_data_access.h"\n'
+            tableDataAccessString += '#include "' + tableName + '_ovsdb_get.h"\n\n'
+            tableDataAccessString += '#include "openswitch-idl.h"\n'
+            tableDataAccessString += '#include "ovsdb-idl.h"\n'
+            tableDataAccessString += '#include "vswitch-idl.h"\n'
+            tableDataAccessString += '#include "openvswitch/vlog.h"\n\n'
+            tableDataAccessString += 'extern struct ovsdb_idl *idl;\n\n'
             tableDataAccessString += 'int ' + tableName + '_init_data(' + tableName + '_registration *' + tableName + '_reg) {\n'
             tableDataAccessString += 'return MFD_SUCCESS;\n'
             tableDataAccessString += '}\n\n'
@@ -1460,9 +1730,11 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataAccessString += '}\n\n'
             tableDataAccessString += 'int ' + tableName + '_container_load(netsnmp_container *container) {\n'
             tableDataAccessString += tableName + '_rowreq_ctx *rowreq_ctx;\n'
-            tableDataAccessString += 'size_t count = 0;\n'
-            for idx in indexes:
-                tableDataAccessString += self.ctypeClasses[self.getSubTypeString(idx['subtype'])] + ' ' + idx['name'] + ';\n'
+            tableDataAccessString += 'size_t count = 0;\n\n'
+            tableDataAccessString += self.getOvsdbRowsStringForTable(ovsdbTables)
+            tableDataAccessString += self.getLocalsStringForTable(tableName, indexes)
+            tableDataAccessString += self.getFirstIntanceStringForTable(tableName,ovsdbTables)
+            tableDataAccessString += self.getForLoopStringForTable(tableName, indexes)
             tableDataAccessString += 'return MFD_SUCCESS;\n'
             tableDataAccessString += '}\n\n'
             tableDataAccessString += 'void ' + tableName + '_container_free(netsnmp_container *container) {\n'
@@ -1486,6 +1758,91 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataAccessHeaderString += '#endif'
             self.fileWriter.fileWrite(fileName=tableName + '_data_access.h',data=tableDataAccessHeaderString)
 
+            tableOvsdbGetString = """#include "openswitch-idl.h"
+#include "ovsdb-idl.h"
+#include "vswitch-idl.h"
+#include "openvswitch/vlog.h"
+"""
+            tableOvsdbGetString += '#include "' + tableName + '_ovsdb_get.h"\n\n'
+            for idx in indexes:
+                dbIdx = self.jsonData[tableName]['Indexes'][idx['name']]
+                idxTable = dbIdx['OvsTable']
+                if not idxTable:
+                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row) {\n'
+                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])]+ ' ret = NULL;\n'
+                    tableOvsdbGetString += 'return ret\n'
+                    tableOvsdbGetString += '}\n\n'
+                elif idxTable != rootDbTable:
+                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row) {\n'
+                    tableOvsdbGetString += 'return (' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ')'
+                    if dbIdx['Type']['Key']:
+                        tableOvsdbGetString += 'smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                    else:
+                        tableOvsdbGetString += idxTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                    tableOvsdbGetString += '}\n\n' 
+                else:
+                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row) {\n'
+                    tableOvsdbGetString += 'return (' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ')'
+                    if dbIdx['Type']['Key']:
+                        tableOvsdbGetString += 'smap_get(' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                    else:
+                        tableOvsdbGetString += rootDbTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                    tableOvsdbGetString += '}\n\n'
+            tableOvsdbGetString += '\n'
+            for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+                if col['name'] in [idx['name'] for idx in indexes]:
+                    continue
+                dbCol = self.jsonData[tableName]['Columns'][col['name']]
+                colTable = dbCol['OvsTable']
+                if not colTable:
+                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row) {\n'
+                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ret = NULL;\n'
+                    tableOvsdbGetString += 'return ret\n'
+                    tableOvsdbGetString += '}\n\n'
+                elif colTable != rootDbTable:
+                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row) {\n'
+                    tableOvsdbGetString += 'return (' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ')'
+                    if dbCol['Type']['Key']:
+                        tableOvsdbGetString += 'smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                    else:
+                        tableOvsdbGetString += colTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                    tableOvsdbGetString += '}\n\n'
+                else:
+                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row) {\n'
+                    tableOvsdbGetString += 'return (' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ')'
+                    if dbCol['Type']['Key']:
+                        tableOvsdbGetString += 'smap_get(' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                    else:
+                        tableOvsdbGetString += rootDbTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                    tableOvsdbGetString += '}\n\n'
+            self.fileWriter.fileWrite(fileName=tableName + '_ovsdb_get.c',data=tableOvsdbGetString)
+            
+            tableOvsdbGetHeaderString = '#ifndef ' + tableName.upper() + '_OVSDB_GET_H\n'
+            tableOvsdbGetHeaderString += '#define ' + tableName.upper() + '_OVSDB_GET_H\n\n'
+            for idx in indexes:
+                dbIdx = self.jsonData[tableName]['Indexes'][idx['name']]
+                idxTable = dbIdx['OvsTable']
+                if not idxTable:
+                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row);\n'
+                elif idxTable != rootDbTable:
+                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row);\n'
+                else:
+                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row);\n'
+            tableOvsdbGetHeaderString += '\n'
+            for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+                if col['name'] in [idx['name'] for idx in indexes]:
+                    continue
+                dbCol = self.jsonData[tableName]['Columns'][col['name']]
+                colTable = dbCol['OvsTable']
+                if not colTable:
+                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row);\n'
+                elif colTable != rootDbTable:
+                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row);\n'
+                else:
+                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row);\n'
+            tableOvsdbGetHeaderString += '#endif'
+            self.fileWriter.fileWrite(fileName=tableName + '_ovsdb_get.h',data=tableOvsdbGetHeaderString)
+            
             tableEnumsHeaderString = '#ifndef ' + tableName.upper() + '_ENUMS_H\n'
             tableEnumsHeaderString += '#define ' + tableName.upper() + '_ENUMS_H\n'
             tableEnumsHeaderString += '#endif\n'
@@ -1540,7 +1897,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += 'int mfd_modes = 0;\n\n'
             tableInterfaceString += 'netsnmp_table_helper_add_indexes(tbl_info'
             for idx in indexes:
-                tableInterfaceString += ', ' + self.netsnmpTypes[self.getSubTypeString(idx['subtype'])]
+                tableInterfaceString += ', ' + self.netsnmpTypes[self.getObjTypeString(idx['syntax'])]
             tableInterfaceString += ', 0);\n'
             tableInterfaceString += tableName + '_if_ctx.user_ctx = reg_ptr;\n'
             tableInterfaceString += tableName + '_init_data(reg_ptr);\n'
@@ -1606,8 +1963,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 tableInterfaceString += 'netsnmp_variable_list var_' + idx['name'] + ';\n'
             for index, idx in enumerate(indexes):
                 tableInterfaceString += 'memset( &var_' + idx['name'] + ', 0x00, sizeof(var_' + idx['name'] + '));\n'
-                tableInterfaceString += 'var_' + idx['name'] + '.type = ' + self.netsnmpTypes[self.getSubTypeString(idx['subtype'])] + ';\n'
-                if index is not len(indexes) -1:
+                tableInterfaceString += 'var_' + idx['name'] + '.type = ' + self.netsnmpTypes[self.getObjTypeString(idx['syntax'])] + ';\n'
+                if index is not len(indexes) - 1:
                     tableInterfaceString += 'var_' + idx['name'] + '.next_variable = &' + indexes[index + 1]['name'] + ';\n'
                 else:
                     tableInterfaceString += 'var_' + idx['name'] + '.next_variable = NULL;\n'
@@ -1625,15 +1982,15 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 tableInterfaceString += 'netsnmp_variable_list var_' + idx['name'] + ';\n'
             for index, idx in enumerate(indexes):
                 tableInterfaceString += 'memset(&var_' + idx['name'] + ', 0x00, sizeof(var_' + idx['name'] + '));\n'
-                tableInterfaceString += 'var_' + idx['name'] + '.type = ' + self.netsnmpTypes[self.getSubTypeString(idx['subtype'])] + ';\n'
-                if index is not len(indexes)-1:
+                tableInterfaceString += 'var_' + idx['name'] + '.type = ' + self.netsnmpTypes[self.getObjTypeString(idx['syntax'])] + ';\n'
+                if index is not len(indexes) - 1:
                     tableInterfaceString += 'var_' + idx['name'] + '.next_variable = &' + indexes[index + 1]['name'] + ';\n'
                 else:
                     tableInterfaceString += 'var_' + idx['name'] + '.next_variable = NULL;\n'
             tableInterfaceString += 'err = parse_oid_indexes( oid_idx->oids, oid_idx->len, &var_' + indexes[0]['name'] + ');\n'
             tableInterfaceString += 'if (err == SNMP_ERR_NOERROR) {\n'
             for idx in indexes:
-                tableInterfaceString += 'mib_idx->' + idx['name'] + '*((' + self.ctypeClasses[self.getSubTypeString(idx['subtype'])] + '*)var_' + idx['name'] + '.val.string);\n'
+                tableInterfaceString += 'mib_idx->' + idx['name'] + '*((' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + '*)var_' + idx['name'] + '.val.string);\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'snmp_reset_var_buffers(&var_' + indexes[0]['name'] + ';\n'
             tableInterfaceString += 'return err;\n'
@@ -1704,9 +2061,9 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += 'switch(column) {\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
                 tableInterfaceString += 'case COLUMN_' + col['name'].upper() + ':\n'
-                tableInterfaceString += 'var->val_len = sizeof(' + self.ctypeClasses[self.getSubTypeString(col['subtype'])] + ');\n'
-                tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getSubTypeString(col['subtype'])] + ';\n'
-                tableInterfaceString += 'rc = ' + col['name'] + '_get(rowreq_ctx, (' + self.ctypeClasses[self.getSubTypeString(col['subtype'])] + '*)var->val.string);\n'
+                tableInterfaceString += 'var->val_len = sizeof(' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ');\n'
+                tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(col['syntax'])] + ';\n'
+                tableInterfaceString += 'rc = ' + col['name'] + '_get(rowreq_ctx, (' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + '*)var->val.string);\n'
                 tableInterfaceString += 'break;\n'
             tableInterfaceString += 'default:\n'
             tableInterfaceString += 'break;\n'
