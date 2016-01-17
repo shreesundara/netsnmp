@@ -425,16 +425,17 @@ class NetSnmpCodeGen(AbstractCodeGen):
     def getTypeFromSymbolTable(self, sym):
         for mod in self.symbolTable:
             if sym in self.symbolTable[mod]:
-                return self.symbolTable[mod][sym]['syntax'][0][0]
-        return ''
+                return self.symbolTable[mod][sym]['syntax'][0][0] , self.symbolTable[mod][sym]['syntax'][0][1]
+        return '',[]
 
     def getBaseTypeFromSymbolTable(self,mod,sym):
         baseType = self.symbolTable[mod][sym]['syntax'][0][0]
+        subType = self.symbolTable[mod][sym]['syntax'][0][1]
         if baseType is 'MibTable' or baseType is 'MibTableRow' or baseType is 'MibTableColumn':
             return None
         while baseType not in self.ctypeClasses:
-            baseType = self.getTypeFromSymbolTable(baseType)
-        return baseType
+            baseType, subType = self.getTypeFromSymbolTable(baseType)
+        return baseType, subType
 
     def genImports(self, imports):
         outStr = ''
@@ -472,9 +473,9 @@ class NetSnmpCodeGen(AbstractCodeGen):
                         continue
                     if s not in self.symbolTable[module]:
                         continue
-                    importType = self.getBaseTypeFromSymbolTable(module,s)
+                    importType,subType = self.getBaseTypeFromSymbolTable(module,s)
                     if importType:
-                        self.customTypes[s] = {'baseType':importType}
+                        self.customTypes[s] = {'baseType':importType,'subType':subType}
                 self._presentedSyms = self._presentedSyms.union([self.transOpers(s) for s in symbols])
                 self._importMap.update([(self.transOpers(s), module) for s in symbols])
                 # outStr += '( %s, ) = mibBuilder.importSymbols("%s")\n' % \
@@ -667,9 +668,12 @@ class NetSnmpCodeGen(AbstractCodeGen):
         return ret
 
     def getSubTypeFromSyntax(self, syntax):
-        ret = ''
+        ret = {}
         if 'SimpleSyntax' in syntax:
-            ret = syntax['SimpleSyntax']['subType']
+            if syntax['SimpleSyntax']['objType'] in self.customTypes:
+                ret = self.customTypes[syntax['SimpleSyntax']['objType']]['subType']
+            else:
+                ret = syntax['SimpleSyntax']['subType']
         return ret
 
     def genObjectType(self, data, classmode=0):
@@ -762,7 +766,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 #attrs + '\n'
                 #baseType = parentType[:parentType.find(',')]
                 if 'SimpleSyntax' in attrs:
-                    self.customTypes[name] = {'baseType':attrs['SimpleSyntax']['objType']}
+                    self.customTypes[name] = {'baseType':attrs['SimpleSyntax']['objType'],
+                                              'subType':attrs['SimpleSyntax']['subType']}
                 elif 'Bits' in attrs:
                     self.customTypes[name] = {'baseType':'Bits'}
                 outDict = attrs
@@ -1111,7 +1116,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr = 'void snmp_init(void) {\n'
         for codeSym in self.codeSymbols:
             name, tempStr = codeSym.items()[0]
-            outStr += 'init_' + name+ '();\n'
+            outStr += 'init_' + name + '();\n'
         outStr += '}\n'
         outStr += 'void snmp_shutdown(void) {\n'
         for codeSym in self.codeSymbols:
@@ -1119,122 +1124,6 @@ class NetSnmpCodeGen(AbstractCodeGen):
             outStr += 'shutdown_' + name + '();\n'
         outStr += '}\n'
         return outStr
-
-    def genIntCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
-        outStr = 'static int netsnmp_' + name + ' = 42;\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
-        outStr += 'void register_' + name + '(void) {\n'
-        outStr += 'const oid ' + name + '_oid[] = ' + str(oid).replace('[','{').replace(']','}') + ';\n'
-        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("' + name + '", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
-        outStr += '}\n\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
-        outStr += 'if(reqinfo->mode == MODE_GET) {\n'
-        jsonValue = self.jsonData[name]
-        if not jsonValue['OvsTable']:
-            outStr += ''
-        else:
-            outStr += 'const ovsrec_' + jsonValue['OvsTable'] + ' *' + jsonValue['OvsTable'] + '_row = ovsrec_' + jsonValue['OvsTable'] + '_first(idl);\n'
-            outStr += 'netsnmp_' + name + ' = ovsdb_get_' + name + '(idl, ' + jsonValue['OvsTable'] + '_row);\n'
-        outStr += 'snmp_set_var_typed_value(requests->requestvb, ASN_INTEGER, &netsnmp_' + name + ', sizeof(netsnmp_' + name + '));\n'
-        outStr += '}\n'
-        outStr += 'return SNMP_ERR_NOERROR;\n'
-        outStr += '}\n\n'
-        return outStr
-
-    def genTimeTicksCode(self, name, syntax, units, maxaccess,description, augmention, index, defval,oid):
-        outStr = 'static unsigned long netsnmp_' + name + ' = 42;\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
-        outStr += 'void register_' + name + '(void) {\n'
-        outStr += 'const oid ' + name + '_oid[] = ' + str(oid).replace('[','{').replace(']','}') + ';\n'
-        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("' + name + '", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
-        outStr += '}\n\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
-        outStr += 'if(reqinfo->mode == MODE_GET) {\n'
-        outStr += 'snmp_set_var_typed_value(requests->requestvb, ASN_TIMETICKS, &netsnmp_' + name + ', sizeof(netsnmp_' + name + '));\n'
-        outStr += '}\n'
-        outStr += 'return SNMP_ERR_NOERROR;\n'
-        outStr += '}\n\n'
-        return outStr
-
-    def genStringCode(self, name, syntax, units, maxaccess, description, augmention, index, defval,oid):
-        minConstraint, maxConstraint = syntax['SimpleSyntax']['subType'].get('ValueSizeConstraint',(0,0))
-        if maxConstraint == 0:
-            stringLength = 256
-        else:
-            if minConstraint == 0:
-                stringLength = maxConstraint + 1
-            else:
-                stringLength = maxConstraint
-        outStr = 'static char netsnmp_' + name + '[' + str(stringLength) + '] = "Avinash";\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
-        outStr += 'void register_' + name + '(void) {\n'
-        outStr += 'const oid ' + name + '_oid[] = ' + str(oid).replace('[','{').replace(']','}') + ';\n'
-        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("' + name + '", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
-        outStr += '}\n\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
-        outStr += 'if(reqinfo->mode == MODE_GET) {\n'
-        outStr += 'snmp_set_var_typed_value(requests->requestvb, ASN_OCTET_STR, netsnmp_' + name + ', strlen(netsnmp_' + name + '));\n'
-        outStr += '}\n'
-        outStr += 'return SNMP_ERR_NOERROR;\n'
-        outStr += '}\n\n'
-        return outStr
-
-    def genOidCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
-        outStr = 'static oid netsnmp_' + name + '[MAX_OID_LEN] = { 0 };\n'
-        outStr += 'static int netsnmp_' + name + '_byte_length = 1;\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
-        outStr += 'void register_' + name + '(void) {\n'
-        outStr += 'const oid ' + name + '_oid[] = ' + str(oid).replace('[','{').replace(']','}') + ';\n'
-        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("' + name + '", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
-        outStr += '}\n\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
-        outStr += 'if(reqinfo->mode == MODE_GET) {\n'
-        outStr += 'snmp_set_var_typed_value(requests->requestvb, ASN_OBJECT_ID, netsnmp_' + name + ', netsnmp_' + name + '_byte_length);\n'
-        outStr += '}\n'
-        outStr += 'return SNMP_ERR_NOERROR;\n'
-        outStr += '}\n\n'
-        return outStr
-
-    def genGuageCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
-        outStr = 'static u_long netsnmp_' + name + ' = 0 ;\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
-        outStr += 'void register_' + name + '(void) {\n'
-        outStr += 'const oid ' + name + '_oid[] = ' + str(oid).replace('[','{').replace(']','}') + ';\n'
-        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("' + name + '", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
-        outStr += '}\n\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
-        outStr += 'if(reqinfo->mode == MODE_GET) {\n'
-        outStr += 'snmp_set_var_typed_value(requests->requestvb, ASN_GAUGE, netsnmp_' + name + ', netsnmp_' + name + '_byte_length);\n'
-        outStr += '}\n'
-        outStr += 'return SNMP_ERR_NOERROR;\n'
-        outStr += '}\n\n'
-        return outStr
-
-    def genCounterCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
-        outStr = 'static u_long netsnmp_' + name + ' = 0;\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
-        outStr += 'void register_' + name + '(void) {\n'
-        outStr += 'const oid ' + name + '_oid[] = ' + str(oid).replace('[','{').replace(']','}') + ';\n'
-        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("' + name + '", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
-        outStr += '}\n\n'
-        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
-        outStr += 'if(reqinfo->mode == MODE_GET) {\n'
-        outStr += 'snmp_set_var_typed_value(requests->requestvb, ASN_COUNTER, netsnmp_' + name + ', netsnmp_' + name + '_byte_length);\n'
-        outStr += '}\n'
-        outStr += 'return SNMP_ERR_NOERROR;\n'
-        outStr += '}\n\n'
-        return outStr
-
-    def genBitsCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
-        return ''
-
-    codeGenTable = { 'Integer32':genIntCode,
-                   'TimeTicks': genTimeTicksCode,
-                   'OctetString':genStringCode,
-                   'ObjectIdentifier': genOidCode,
-                   'Guage32':genGuageCode,
-                   'Counter32':genCounterCode,
-                   'Bits': genBitsCode}
 
     def getObjTypeString(self, syntax):
         ret = ''
@@ -1252,20 +1141,17 @@ class NetSnmpCodeGen(AbstractCodeGen):
             return ''
         oidStr, parendOid = oid
         objType = syntax['SimpleSyntax']['objType']
-        #try:
+    
         baseType = objType
         if objType in self.customTypes:
             baseType = self.customTypes[objType]['baseType']
-            #outStr = self.codeGenTable[baseType](self, name,syntax,units,maxaccess,description,augmention,index,defval,oid)
-        #else:
-        #    baseType = objType
-        #    outStr = self.codeGenTable[baseType](self,name, syntax, units, maxaccess, description, augmention, index, defval, oidStr)
-        #except Exception as ex:
-        #    print ex.message
-        #    outStr = ''
+    
         outStr = 'static '
         if self.getObjTypeString(syntax) == 'OctetString':
-            minConstraint, maxConstraint = syntax['SimpleSyntax']['subType'].get('ValueSizeConstraint',(0,0))
+            if 'octetStringSubType' in syntax['SimpleSyntax']['subType']:
+                minConstraint, maxConstraint = syntax['SimpleSyntax']['subType']['octetStringSubType'].get('ValueSizeConstraint',(0,0))
+            else:
+                minConstraint, maxConstraint = (0,0)
             if maxConstraint == 0:
                 stringLength = 256
             else:
@@ -1273,26 +1159,26 @@ class NetSnmpCodeGen(AbstractCodeGen):
                     stringLength = maxConstraint + 1
                 else:
                     stringLength = maxConstraint
-            outStr += 'char netsnmp_'+name+'['+str(stringLength)+'] = "Avinash";\n'
+            outStr += 'char netsnmp_' + name + '[' + str(stringLength) + '] = "Avinash";\n'
         elif self.getObjTypeString(syntax) == 'ObjectIdentifier':
-            outStr += 'oid netsnmp_'+name+'[MAX_OID_LEN] = {0};\n'
-            outStr += 'static int netsnmp_'+name+'_byte_length = 1;\n'
+            outStr += 'oid netsnmp_' + name + '[MAX_OID_LEN] = {0};\n'
+            outStr += 'static int netsnmp_' + name + '_byte_length = 1;\n'
         else:
-            outStr += self.ctypeClasses[self.getObjTypeString(syntax)] +' netsnmp_'+name+' = NULL;\n'
-        outStr += 'int handler_'+name+'(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
-        outStr += 'void init_' + name+'(void) {\n'
-        outStr += 'const oid ' +name+'_oid[] = ' + str(oidStr).replace('[', '{').replace(']','}') + ';\n'
-        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("'+name+'", handler_'+name+',' +name+'_oid, OID_LENGTH('+name+'_oid), HANDLER_CAN_RWRITE));\n'
+            outStr += self.ctypeClasses[self.getObjTypeString(syntax)] + ' netsnmp_' + name + ' = NULL;\n'
+        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
+        outStr += 'void init_' + name + '(void) {\n'
+        outStr += 'const oid ' + name + '_oid[] = ' + str(oidStr).replace('[', '{').replace(']','}') + ';\n'
+        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("' + name + '", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
         outStr += '}\n\n'
-        outStr += 'int handler_'+name+'(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
+        outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
         outStr += 'if(reqinfo->mode == MODE_GET) {\n'
         jsonValue = self.jsonData[name]
         if not jsonValue['OvsTable']:
             outStr += ''
         else:
-            outStr += 'const ovsrec_' + jsonValue['OvsTable'] + ' *' + jsonValue['OvsTable'] + '_row = ovsrec_'+jsonValue['OvsTable'] +'_first(idl);\n'
-            outStr += 'netsnmp_'+name+' = ovsdb_get_' +name+'(idl, '+jsonValue['OvsTable']+'_row);\n'
-        outStr += 'snmp_set_var_typed_value(requests->requestvb, '+ self.netsnmpTypes[self.getObjTypeString(syntax)]+', &netsnmp_'+name+', sizeof(netsnmp_'+name+'));\n'
+            outStr += 'const ovsrec_' + jsonValue['OvsTable'] + ' *' + jsonValue['OvsTable'] + '_row = ovsrec_' + jsonValue['OvsTable'] + '_first(idl);\n'
+            outStr += 'netsnmp_' + name + ' = ovsdb_get_' + name + '(idl, ' + jsonValue['OvsTable'] + '_row);\n'
+        outStr += 'snmp_set_var_typed_value(requests->requestvb, ' + self.netsnmpTypes[self.getObjTypeString(syntax)] + ', &netsnmp_' + name + ', sizeof(netsnmp_' + name + '));\n'
         outStr += '}\n'
         outStr += 'return SNMP_ERR_NOERROR;\n'
         outStr += '}\n\n'
@@ -1369,14 +1255,16 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 classmode = clausetype == 'typeDeclaration'
                 self.handlersTable[declr[0]](self, self.prepData(declr[1:], classmode), classmode)
         #for importAst in [x[2] for x in self.parsedMibs.items()]:
-        #    tempModuleName, tempModuleOid, tempImports, tempDeclarations = importAst
+        #    tempModuleName, tempModuleOid, tempImports, tempDeclarations =
+        #    importAst
         #    if tempModuleName in baseMibs:
         #        continue
         #    for declr in tempDeclarations and tempDeclarations or []:
         #        if declr:
         #            clausetype = declr[0]
         #            classmode = clausetype == 'typeDeclaration'
-        #            self.handlersTable[declr[0]](self, self.prepData(declr[1:], classmode), classmode)
+        #            self.handlersTable[declr[0]](self,
+        #            self.prepData(declr[1:], classmode), classmode)
         #for sym in self.symbolTable[self.moduleName[0]]['_symtable_order']:
             # if sym not in self._out:
             #     raise error.PySmiCodegenError('No generated code for symbol
@@ -1412,7 +1300,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             scalar = self._out[name]
             scalarJson = self.jsonData[name]
             if not scalarJson['OvsTable']:
-                scalarOvsdbGetString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'] )]+ ' ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl) {\n'
+                scalarOvsdbGetString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ' ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl) {\n'
                 scalarOvsdbGetString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ' temp = NULL;\n'
                 scalarOvsdbGetString += 'return temp;\n'
                 scalarOvsdbGetString += '}\n\n'
@@ -1589,11 +1477,46 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableFileHeaderString += 'typedef struct ' + tableName + '_data_s {\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
                 if col['name'] not in self.tableRows[self.tables[tableName]['row']]['index']:
-                    tableFileHeaderString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ' + col['name'] + ';\n'
+                    if self.getObjTypeString(col['syntax']) == 'OctetString':
+                        if col['syntax']['SimpleSyntax']['subType'] == {}:
+                            subType = self.getSubTypeFromSyntax(col['syntax'])
+                        else:
+                            subType = col['syntax']['SimpleSyntax']['subType']
+                        if 'octetStringSubType' in subType:
+                            minConstraint, maxConstraint = subType['octetStringSubType'].get('ValueSizeConstraint',(0,0))
+                        else:
+                            minConstraint, maxConstraint = (0, 0)
+                        if maxConstraint == 0:
+                            stringLength = maxConstraint +1
+                        else:
+                            stringLength = maxConstraint
+                        tableFileHeaderString += 'char '+col['name']+'['+str(stringLength)+'];\n'
+                        tableFileHeaderString += 'size_t'+col['name']+'_len;\n'
+                    elif self.getObjTypeString(col['syntax']) == 'ObjectIdentifier':
+                        tableFileHeaderString += 'oid '+col['name']+'[MAX_OID_LEN];\n'
+                        tableFileHeaderString += 'size_t '+col['name']+'_len;\n'
+                    else:
+                        tableFileHeaderString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ' + col['name'] + ';\n'
             tableFileHeaderString += '} ' + tableName + '_data;\n\n'
             tableFileHeaderString += 'typedef struct ' + tableName + '_mib_index_s {\n'
             for idx in indexes:
-                tableFileHeaderString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + ';\n'
+                if self.getObjTypeString(idx['syntax']) == 'OctetString':
+                    subType = self.getSubTypeFromSyntax(idx['syntax'])
+                    if 'octetStringSubType' in subType:
+                        minConstraint, maxConstraint = subType['octetStringSubType'].get('ValueSizeConstraint', (0,0))
+                    else:
+                        minConstraint,maxConstraint = (0,0)
+                    if maxConstraint == 0:
+                        stringLength = maxConstraint +1
+                    else:
+                        stringLength = maxConstraint
+                    tableFileHeaderString += 'char '+idx['name']+'['+str(stringLength)+'];\n'
+                    tableFileHeaderString += 'size_t'+idx['name'] +'_len;\n'
+                elif self.getObjTypeString(idx['syntax']) == 'ObjectIdentifier':
+                    tableFileHeaderString += 'oid '+idx['name']+'[MAX_OID_LEN];\n'
+                    tableFileHeaderString += 'size_t '+idx['name']+'_len;\n'
+                else:
+                    tableFileHeaderString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + ';\n'
             tableFileHeaderString += '} ' + tableName + '_mib_index;\n\n'
             #tableFileHeaderString += '#define MAX_' + tableName+'_IDX_LEN 1'
             tableFileHeaderString += 'typedef struct ' + tableName + '_rowreq_ctx_s {\n'
@@ -1769,7 +1692,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 idxTable = dbIdx['OvsTable']
                 if not idxTable:
                     tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row) {\n'
-                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])]+ ' ret = NULL;\n'
+                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ret = NULL;\n'
                     tableOvsdbGetString += 'return ret\n'
                     tableOvsdbGetString += '}\n\n'
                 elif idxTable != rootDbTable:
