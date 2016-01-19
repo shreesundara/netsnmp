@@ -675,6 +675,28 @@ class NetSnmpCodeGen(AbstractCodeGen):
             else:
                 ret = syntax['SimpleSyntax']['subType']
         return ret
+        
+    def getMinMaxConstraints(self, row):
+        if row['syntax']['SimpleSyntax']['subType'] == {}:
+            subType = self.getSubTypeFromSyntax(row['syntax'])
+        else:
+            subType = row['syntax']['SimpleSyntax']['subType']
+        if 'octetStringSubType' in subType:
+            minConstraint, maxConstraint = subType['octetStringSubType'].get('ValueSizeConstraint', (0,0))
+        else:
+            minConstraint, maxConstraint = (0,0)
+        return minConstraint, maxConstraint
+    
+    def getStringLength(self, row):
+        minConstraint, maxConstraint = self.getMinMaxConstraints(row)
+        stringLength = 255
+        if minConstraint == 0:
+            stringLength = maxConstraint +1
+        elif maxConstraint == 0:
+            stringLength = 255
+        else:
+            stringLength = maxConstraint
+        return stringLength
 
     def genObjectType(self, data, classmode=0):
         name, syntax, units, maxaccess, description, augmention, index, defval, oid = data
@@ -1139,6 +1161,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
     def genScalarCode(self, name, syntax, units, maxaccess, description, augmention, index, defval, oid):
         if name not in self.jsonData:
             return ''
+        jsonValue = self.jsonData[name]
         oidStr, parendOid = oid
         objType = syntax['SimpleSyntax']['objType']
     
@@ -1159,7 +1182,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                     stringLength = maxConstraint + 1
                 else:
                     stringLength = maxConstraint
-            outStr += 'char netsnmp_' + name + '[' + str(stringLength) + '] = "Avinash";\n'
+            outStr += 'char netsnmp_' + name + '[' + str(stringLength) + '];\n'
         elif self.getObjTypeString(syntax) == 'ObjectIdentifier':
             outStr += 'oid netsnmp_' + name + '[MAX_OID_LEN] = {0};\n'
             outStr += 'static int netsnmp_' + name + '_byte_length = 1;\n'
@@ -1168,17 +1191,27 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests);\n\n'
         outStr += 'void init_' + name + '(void) {\n'
         outStr += 'const oid ' + name + '_oid[] = ' + str(oidStr).replace('[', '{').replace(']','}') + ';\n'
-        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("' + name + '", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n'
+        outStr += 'netsnmp_register_scalar(\n netsnmp_create_handler_registration("' + name + '", handler_' + name + ',' + name + '_oid, OID_LENGTH(' + name + '_oid), HANDLER_CAN_RWRITE));\n\n'
+        if jsonValue['OvsTable'] and jsonValue['OvsColumn']:
+            outStr += 'ovsdb_add_idl_column(&ovsrec_'+jsonValue['OvsTable']+'_'+jsonValue['OvsColumn']+');\n'
         outStr += '}\n\n'
         outStr += 'int handler_' + name + '(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {\n'
         outStr += 'if(reqinfo->mode == MODE_GET) {\n'
-        jsonValue = self.jsonData[name]
+        scalarType = self.getObjTypeString(syntax)
         if not jsonValue['OvsTable']:
-            outStr += ''
+            outStr += 'ovsdb_get_'+name+'(idl, &netsnmp_'+name+');\n'
         else:
             outStr += 'const ovsrec_' + jsonValue['OvsTable'] + ' *' + jsonValue['OvsTable'] + '_row = ovsrec_' + jsonValue['OvsTable'] + '_first(idl);\n'
-            outStr += 'netsnmp_' + name + ' = ovsdb_get_' + name + '(idl, ' + jsonValue['OvsTable'] + '_row);\n'
-        outStr += 'snmp_set_var_typed_value(requests->requestvb, ' + self.netsnmpTypes[self.getObjTypeString(syntax)] + ', &netsnmp_' + name + ', sizeof(netsnmp_' + name + '));\n'
+            if scalarType == 'OctetString' or scalarType == 'ObjectIdentifier':
+                outStr += 'ovsdb_get_' + name +'(idl, ' + jsonValue['OvsTable']+', netsnmp_'+name+', &netsnmp_'+name+'_len);\n'
+            else:
+                outStr += 'ovsdb_get_' + name + '(idl, ' + jsonValue['OvsTable'] + '_row, &netsnmp_'+name+');\n'
+        if scalarType == 'OctetString':
+            outStr += 'snmp_set_var_typed_value(requests->requestvb, ' + self.netsnmpTypes[scalarType] + ', &netsnmp_' + name + ', strlen(netsnmp_' +name + '));\n'
+        elif scalarType == 'ObjectIdentifier':
+            outStr += 'snmp_set_var_typed_value(requests->requestvb, ' + self.netsnmpTypes[scalarType] + ', &netsnmp_' + name + ', MAX_OID_LEN *strlen(netsnmp_' +name + '[0]));\n'
+        else:
+            outStr += 'snmp_set_var_typed_value(requests->requestvb, ' + self.netsnmpTypes[self.getObjTypeString(syntax)] + ', &netsnmp_' + name + ', sizeof(netsnmp_' + name + '));\n'
         outStr += '}\n'
         outStr += 'return SNMP_ERR_NOERROR;\n'
         outStr += '}\n\n'
@@ -1299,18 +1332,45 @@ class NetSnmpCodeGen(AbstractCodeGen):
             name, outStr = sym.items()[0]
             scalar = self._out[name]
             scalarJson = self.jsonData[name]
+            scalarType = self.getObjTypeString(scalar['syntax'])
             if not scalarJson['OvsTable']:
-                scalarOvsdbGetString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ' ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl) {\n'
-                scalarOvsdbGetString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ' temp = NULL;\n'
-                scalarOvsdbGetString += 'return temp;\n'
+                if scalarType == 'OctetString':
+                    scalarOvsdbGetString += 'void ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, char *'+scalar['name']+'_val_ptr, size_t *'+scalar['name']+'_val_ptr_len) {\n'
+                    scalarOvsdbGetString += '*'+scalar['name']+'_val_ptr = NULL;\n'
+                    scalarOvsdbGetString += '*'+scalar['name'] + '_val_ptr_len = 0;\n'
+                elif scalarType == 'ObjectIdentifier':
+                    scalarOvsdbGetString += 'void ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, oid *'+scalar['name']+'_val_ptr, size_t *'+scalar['name']+'_val_ptr_len) {\n'
+                    scalarOvsdbGetString += '*' +scalar['name']+'_val_ptr = NULL;\n'
+                    scalarOvsdbGetString += '*' +scalar['name']+'_val_ptr_len = 0;\n'
+                else:
+                    scalarOvsdbGetString += self.ctypeClasses[scalarType] + ' ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, '+self.ctypeClasses[scalarType]+' *'+scalar['name']+'_val_ptr) {\n'
+                    scalarOvsdbGetString += '*'+scalar['name']+'_val_ptr = NULL\n;'
                 scalarOvsdbGetString += '}\n\n'
                 continue
-            scalarOvsdbGetString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ' ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, const ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row) {\n'
-            scalarOvsdbGetString += 'return (' + self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ')'
-            if scalarJson['Type']['Key']:
-                scalarOvsdbGetString += 'smap_get(' + scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ', "' + scalarJson['Type']['Key'] + '");\n'
+            if scalarType == 'OctetString':
+                scalarOvsdbGetString += 'void ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, const ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row, char *'+scalar['name']+'_val_ptr, size_t *'+scalar['name']+'_val_ptr_len) {\n'
+                scalarOvsdbGetString += 'char *temp = (char*)'
+                if scalarJson['Type']['Key']:
+                    scalarOvsdbGetString += 'smap_get(' + scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ', "' + scalarJson['Type']['Key'] + '");\n'
+                else:
+                    scalarOvsdbGetString += scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ';\n'
+                scalarOvsdbGetString += '*'+scalar['name']+'_val_ptr_len = strlen(temp);\n'
+                scalarOvsdbGetString += 'memcpy('+scalar['name']+'_val_ptr, temp, strlen(temp));\n'
+            elif scalarType == 'ObjectIdentifier':
+                scalarOvsdbGetString += 'void ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, const ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row, oid *'+scalar['name']+'_val_ptr, size_t *'+scalar['name']+'_val_ptr_len) {\n'
+                scalarOvsdbGetString += 'oid *temp = (oid *)'
+                if scalarJson['Type']['Key']:
+                    scalarOvsdbGetString += 'smap_get(' + scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ', "' + scalarJson['Type']['Key'] + '");\n'
+                else:
+                    scalarOvsdbGetString += scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ';\n'
+                scalarOvsdbGetString += 'memcpy('+scalar['name']+'_val_ptr, temp, MAX_OID_LEN);\n'
             else:
-                scalarOvsdbGetString += scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ';\n'
+                scalarOvsdbGetString += 'void ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, const ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row, '+self.ctypeClasses[scalarType]+'*'+scalar['name']+'_val_ptr) {\n'
+                scalarOvsdbGetString += '*'+scalar['name']+'_val_ptr = ('+self.ctypeClasses[scalarType]+')'
+                if scalarJson['Type']['Key']:
+                    scalarOvsdbGetString += 'smap_get(' + scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ', "' + scalarJson['Type']['Key'] + '");\n'
+                else:
+                    scalarOvsdbGetString += scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ';\n'
             scalarOvsdbGetString += '}\n\n'
         self.fileWriter.fileWrite(fileName=moduleName + '_ovsdb_get.c',data=scalarOvsdbGetString)
 
@@ -1320,10 +1380,21 @@ class NetSnmpCodeGen(AbstractCodeGen):
             name, outStr = sym.items()[0]
             scalar = self._out[name]
             scalarJson = self.jsonData[name]
+            scalarType = self.getObjTypeString(scalar['syntax'])
             if not scalarJson['OvsTable']:
-                scalarOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ' ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl);\n'
+                if scalarType == 'OctetString':
+                    scalarOvsdbGetHeaderString += 'void ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, char *'+scalar['name']+'_val_ptr, size_t*'+scalar['name']+'_val_ptr_len);\n'
+                elif scalarType == 'ObjectIdentifier':
+                    scalarOvsdbGetHeaderString += 'void ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, oid *'+scalar['name']+'_val_ptr, size_t*'+scalar['name']+'_val_ptr_len);\n'
+                else:
+                    scalarOvsdbGetHeaderString += 'void ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, '+self.ctypeClasses[scalarType]+' *'+scalar['name']+'_val_ptr);\n'
                 continue
-            scalarOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(scalar['syntax'])] + ' ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, const ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row);\n'
+            if scalarType == 'OctetString':
+                scalarOvsdbGetHeaderString += 'void ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, const ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row, char*'+scalar['name']+'_val_ptr, size_t*'+scalar['name']+'_val_ptr_len);\n'
+            elif scalarType == 'ObjectIdentifier':
+                scalarOvsdbGetHeaderString += 'void ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, const ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row, oid*'+scalar['name']+'_val_ptr, size_t*'+scalar['name']+'_val_ptr_len);\n'
+            else:
+                scalarOvsdbGetHeaderString += 'void ovsdb_get_' + scalar['name'] + '(ovsdb_idl *idl, const ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row, '+self.ctypeClasses[scalarType]+' *'+scalar['name']+'_val_ptr);\n'
         scalarOvsdbGetHeaderString += '\n#endif'
         self.fileWriter.fileWrite(fileName=moduleName + '_ovsdb_get.h', data=scalarOvsdbGetHeaderString)
 
@@ -1348,11 +1419,29 @@ class NetSnmpCodeGen(AbstractCodeGen):
     def getLocalsStringForTable(self, tableName, indexes):
         outStr = ''
         for idx in indexes:
-            outStr += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + ';\n' 
+            idxType = self.getObjTypeString(idx['syntax'])
+            if idxType == 'OctetString':
+                stringLength = self.getStringLength(idx)
+                outStr += 'char '+idx['name']+'['+str(stringLength)+'];\n'
+                outStr += 'size_t '+idx['name']+'_len;\n'
+            elif idxType == 'ObjectIdentifier':
+                outStr += 'oid '+idx['name'] + '[MAX_OID_LEN];\n'
+                outStr += 'size_t '+idx['name']+'_len;\n'
+            else:
+                outStr += self.ctypeClasses[idxType] + ' ' + idx['name'] + ';\n' 
         outStr += '\n'
         for col in self.tableRows[self.tables[tableName]['row']]['columns']:
             if col['name'] not in [idx['name'] for idx in indexes]:
-                outStr += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ' + col['name'] + ';\n'
+                colType = self.getObjTypeString(col['syntax'])
+                if colType == 'OctetString':
+                    stringLength = self.getStringLength(col)
+                    outStr += 'char '+col['name']+'['+str(stringLength)+'];\n'
+                    outStr += 'size_t '+col['name']+'_len;\n'
+                elif colType == 'ObjectIdentifier':
+                    outStr += 'oid '+col['name'] + '[MAX_OID_LEN];\n'
+                    outStr += 'size_t '+col['name']+'_len;\n'
+                else:
+                    outStr += self.ctypeClasses[colType] + ' ' + col['name'] + ';\n'
         return outStr + '\n'
         
     def getFirstIntanceStringForTable(self, tableName, tables):
@@ -1371,19 +1460,33 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += 'OVSREC_' + table.upper() + '_FOR_EACH(' + table + '_row, idl) {\n'
         for idx in indexes:
             idxTable = self.jsonData[tableName]['Indexes'][idx['name']]['OvsTable']
+            idxType = self.getObjTypeString(idx['syntax'])
             if idxTable and idxTable != table:
-                outStr += idx['name'] + ' = ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, ' + idxTable + '_row);\n'
+                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                    outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, ' + idxTable + '_row, '+idx['name']+', ' +idx['name']+'_len);\n'
+                else:
+                    outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, ' + idxTable + '_row, '+idx['name']+');\n'
             else:
-                outStr += idx['name'] + ' = ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row);\n'
+                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                    outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, '+idx['name']+', '+idx['name']+'_len);\n'
+                else:
+                    outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, '+idx['name']+');\n'
         outStr += '\n'
         for col in self.tableRows[self.tables[tableName]['row']]['columns']:
             if col['name'] in [idx['name'] for idx in indexes]:
                 continue
             colTable = self.jsonData[tableName]['Columns'][col['name']]['OvsTable']
+            colType = self.getObjTypeString(col['syntax'])
             if colTable and colTable != table:
-                outStr += col['name'] + ' = ovsdb_get_' + col['name'] + '(idl, ' + table + '_row, ' + colTable + '_row);\n'
+                if colType == 'OctetString' or colType == 'ObjectIdentifier':
+                    outStr += 'ovsdb_get_' + col['name'] + '(idl, ' + table + '_row, ' + colTable + '_row, '+col['name']+', ' +col['name']+'_len);\n'
+                else:
+                    outStr += 'ovsdb_get_' + col['name'] + '(idl, ' + table + '_row, ' + colTable + '_row, '+col['name']+');\n'
             else:
-                outStr += col['name'] + ' = ovsdb_get_' + col['name'] + '(idl, ' + table + '_row);\n'
+                if colType == 'OctetString' or colType == 'ObjectIdentifier':
+                    outStr += 'ovsdb_get_' + col['name'] + '(idl, ' + table + '_row, '+col['name']+', '+col['name']+'_len);\n'
+                else:
+                    outStr += 'ovsdb_get_' + col['name'] + '(idl, ' + table + '_row, '+col['name']+');\n'
         outStr += '\n'
         outStr += 'rowreq_ctx = ' + tableName + '_allocate_rowreq_ctx(NULL);\n'
         outStr += 'if (rowreq_ctx == NULL) {\n'
@@ -1392,14 +1495,25 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outStr += '}\n'
         outStr += 'if (MFD_SUCCESS != ' + tableName + '_indexes_set( rowreq_ctx'
         for idx in indexes:
-            outStr += ', ' + idx['name']
+            idxType = self.getObjTypeString(idx['syntax'])
+            if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                outStr += ', ' + idx['name'] + ', '+idx['name'] + '_len'
+            else:
+                outStr += ', ' + idx['name']
         outStr += ')) {\n'
         outStr += 'snmp_log(LOG_ERR, "error setting indexes while loading");\n'
         outStr += tableName + '_relase_rowreq_ctx(rowreq_ctx);\n'
         outStr += 'continue;\n'
         outStr += '}\n\n'
         for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-            outStr += 'rowreq_ctx->data.' + col['name'] + ' = ' + col['name'] + ';\n'
+            if col['name'] in [idx['name'] for idx in indexes]:
+                continue
+            colType = self.getObjTypeString(col['syntax'])
+            if colType == 'OctetString' or colType == 'ObjectIdentifier':
+                outStr += 'rowreq_ctx->data.'+col['name']+'_len = '+col['name']+'_len* sizeof('+col['name']+'[0]);\n'
+                outStr += 'memcpy(rowreq_ctx->data.'+col['name']+', '+col['name']+', '+col['name']+'_len* sizeof('+col['name']+'[0]));\n'
+            else:
+                outStr += 'rowreq_ctx->data.' + col['name'] + ' = ' + col['name'] + ';\n'
         outStr += 'CONTAINER_INSERT(container, rowreq_ctx);\n'
         return outStr + '}\n'
 
@@ -1478,18 +1592,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
                 if col['name'] not in self.tableRows[self.tables[tableName]['row']]['index']:
                     if self.getObjTypeString(col['syntax']) == 'OctetString':
-                        if col['syntax']['SimpleSyntax']['subType'] == {}:
-                            subType = self.getSubTypeFromSyntax(col['syntax'])
-                        else:
-                            subType = col['syntax']['SimpleSyntax']['subType']
-                        if 'octetStringSubType' in subType:
-                            minConstraint, maxConstraint = subType['octetStringSubType'].get('ValueSizeConstraint',(0,0))
-                        else:
-                            minConstraint, maxConstraint = (0, 0)
-                        if maxConstraint == 0:
-                            stringLength = maxConstraint +1
-                        else:
-                            stringLength = maxConstraint
+                        stringLength = self.getStringLength(col)
                         tableFileHeaderString += 'char '+col['name']+'['+str(stringLength)+'];\n'
                         tableFileHeaderString += 'size_t'+col['name']+'_len;\n'
                     elif self.getObjTypeString(col['syntax']) == 'ObjectIdentifier':
@@ -1501,15 +1604,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableFileHeaderString += 'typedef struct ' + tableName + '_mib_index_s {\n'
             for idx in indexes:
                 if self.getObjTypeString(idx['syntax']) == 'OctetString':
-                    subType = self.getSubTypeFromSyntax(idx['syntax'])
-                    if 'octetStringSubType' in subType:
-                        minConstraint, maxConstraint = subType['octetStringSubType'].get('ValueSizeConstraint', (0,0))
-                    else:
-                        minConstraint,maxConstraint = (0,0)
-                    if maxConstraint == 0:
-                        stringLength = maxConstraint +1
-                    else:
-                        stringLength = maxConstraint
+                    stringLength = self.getStringLength(idx)
                     tableFileHeaderString += 'char '+idx['name']+'['+str(stringLength)+'];\n'
                     tableFileHeaderString += 'size_t'+idx['name'] +'_len;\n'
                 elif self.getObjTypeString(idx['syntax']) == 'ObjectIdentifier':
@@ -1549,10 +1644,15 @@ class NetSnmpCodeGen(AbstractCodeGen):
             oidStr,parentOid = self.tables[tableName]['data']['oid']
             oidStr = oidStr.replace('[','').replace(']','')
             tableOidsHeaderString += '#define ' + tableName.upper() + ' ' + oidStr + '\n'
+            minColumn = None
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
                 tempOid, tempParentOid = col['oid']
                 tempOid = tempOid[tempOid.rfind(',') + 1:tempOid.rfind(']')]
+                if col not in indexes and not minColumn:
+                    minColumn = col
                 tableOidsHeaderString += '#define COLUMN_' + col['name'] + ' ' + tempOid + '\n'
+            tableOidsHeaderString += '\n\n#define '+tableName.upper()+'_MIN_COL COLUMN_'+minColumn['name'].upper()+'\n'
+            tableOidsHeaderString += '#define '+tableName.upper()+'_MAX_COL COLUMN_'+self.tableRows[self.tables[tableName]['row']]['columns'][-1]['name'].upper()+'\n'
             tableOidsHeaderString += '#endif'
             self.fileWriter.fileWrite(fileName=tableName + '_oids.h',data=tableOidsHeaderString)
 
@@ -1564,19 +1664,52 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataGetString += '#include ' + tableName + '.h\n\n'
             tableDataGetString += 'int ' + tableName + '_indexes_set_tbl_idx(' + tableName + '_mib_index *tbl_idx'
             for idx in indexes:
-               tableDataGetString += ', ' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + '_val'
+                idxType = self.getObjTypeString(idx['syntax'])
+                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                    tableDataGetString += ', '
+                    if idxType == 'OctetString':
+                        tableDataGetString += 'char *'
+                    else:
+                        tableDataGetString += 'oid *'
+                        # Verify if this is the thing for oid
+                    tableDataGetString += idx['name']+'_val_ptr, size_t '+idx['name']+'_val_ptr_len'
+                else:
+                    tableDataGetString += ', ' + self.ctypeClasses[idxType] + ' ' + idx['name'] + '_val'
             tableDataGetString += ') {\n'
             for idx in indexes:
-                tableDataGetString += 'tbl_idx->' + idx['name'] + ' = ' + idx['name'] + '_val;\n'
+                idxType = self.getObjTypeString(idx['syntax'])
+                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                    tableDataGetString += '\ntbl_idx->'+idx['name']+'_len = sizeof(tbl_idx->'+idx['name']+')/sizeof(tbl_idx->'+idx['name']+'[0]);\n'
+                    tableDataGetString += 'if ((NULL == tbl_idx->'+idx['name']+') || (tbl_idx->'+idx['name']+'_len < ('+idx['name']+'_val_ptr_len))) {\n'
+                    tableDataGetString += 'snmp_log(LOG_ERR, "not enough space for value ('+idx['name']+'_val_ptr)\\n");\n'
+                    tableDataGetString += 'return MFD_ERROR;\n'
+                    tableDataGetString += '}\n'
+                    tableDataGetString += 'tbl_idx->'+idx['name']+'_len = '+idx['name']+'_val_ptr_len;\n'
+                    tableDataGetString += 'memcpy(tbl_idx->'+idx['name']+', '+idx['name']+'_val_ptr, '+idx['name']+'_val_ptr_len* sizeof('+idx['name']+'_val_ptr[0]));\n'
+                else:
+                    tableDataGetString += 'tbl_idx->' + idx['name'] + ' = ' + idx['name'] + '_val;\n'
             tableDataGetString += 'return MFD_SUCCESS;\n'
             tableDataGetString += '}\n\n'
             tableDataGetString += 'int ' + tableName + '_indexes_set(' + tableName + '_rowreq_ctx *rowreq_ctx'
             for idx in indexes:
-               tableDataGetString += ', ' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + '_val'
+                idxType = self.getObjTypeString(idx['syntax'])
+                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                    tableDataGetString += ', '
+                    if idxType == 'OctetString':
+                        tableDataGetString += 'char *'
+                    else:
+                        tableDataGetString += 'oid *'
+                    tableDataGetString += idx['name']+'_val_ptr, size_t '+idx['name']+'_val_ptr_len'
+                else:
+                    tableDataGetString += ', ' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + '_val'
             tableDataGetString += ') {\n'
             tableDataGetString += 'if (MFD_SUCCESS != ' + tableName + '_indexes_set_tbl_idx(&rowreq_ctx->tbl_idx'
             for idx in indexes:
-                tableDataGetString += ', ' + idx['name'] + '_val'
+                idxType = self.getObjTypeString(idx['syntax'])
+                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                    tableDataGetString += ', ' +idx['name']+'_val_ptr, '+idx['name']+'_val_ptr_len\n'
+                else:
+                    tableDataGetString += ', ' + idx['name'] + '_val'
             tableDataGetString += ')) {\n'
             tableDataGetString += 'return MFD_ERROR;\n'
             tableDataGetString += '}\n'
@@ -1587,8 +1720,32 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataGetString += 'return MFD_SUCCESS;\n'
             tableDataGetString += '}\n\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                tableDataGetString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx,' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' *' + col['name'] + '_val_ptr) {\n'
-                tableDataGetString += '(*' + col['name'] + '_val_ptr) = rowreq_ctx->data.' + col['name'] + ';\n'
+                tableDataGetString += 'int ' +col['name'] + '_get(' +tableName+'_rowreq_ctx *rowreq_ctx, '
+                colType = self.getObjTypeString(col['syntax'])
+                if colType == 'OctetString' or colType == 'ObjectIdentifier':
+                    if colType == 'OctetString':
+                        tableDataGetString += 'char **'
+                    else:
+                        tableDataGetString += 'oid **'
+                    tableDataGetString += col['name']+'_val_ptr_ptr, size_t *'+col['name']+'_val_ptr_len_ptr) {\n'
+                    tableDataGetString += 'netsnmp_assert( (NULL != '+col['name']+'_val_ptr_ptr) && (NULL != *'+col['name']+'_val_ptr_ptr));\n'
+                    tableDataGetString += 'netsnmp_assert(NULL != '+col['name']+'_val_ptr_len_ptr);\n'
+                else:
+                    tableDataGetString += self.ctypeClasses[colType]+' *'+col['name']+'_val_ptr) {\n'
+                    tableDataGetString += 'netsnmp_assert(NULL != '+col['name']+'_val_ptr);\n' 
+                tableDataGetString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
+                if colType == 'OctetString' or colType == 'ObjectIdentifier':
+                    tableDataGetString += 'if ((NULL == (*'+col['name']+'_val_ptr_ptr)) || ((*'+col['name']+'_val_ptr_len_ptr) < (rowreq_ctx->data.'+col['name']+'_len* sizeof(rowreq_ctx->data.'+col['name']+'[0])))) {\n'
+                    tableDataGetString += '(* '+col['name']+'_val_ptr_ptr) = malloc(rowreq_ctx->data.'+col['name']+'_len* sizeof(rowreq_ctx->data.'+col['name']+'[0]));\n'
+                    tableDataGetString += 'if (NULL == (*'+col['name']+'_val_ptr_ptr)) {\n'
+                    tableDataGetString += 'snmp_log(LOG_ERR, "could not allocate memory (rowreq_ctx->data.'+col['name']+')\\n");\n'
+                    tableDataGetString += 'return MFD_ERROR;\n'
+                    tableDataGetString += '}\n'
+                    tableDataGetString += '}\n'
+                    tableDataGetString += '(* '+col['name']+'_val_ptr_len_ptr) = rowreq_ctx->data.'+col['name']+'_len* sizeof(rowreq_ctx->data.'+col['name']+'[0]);\n'
+                    tableDataGetString += 'memcpy((*'+col['name']+', rowreq_ctx->data.'+col['name']+'), rowreq_ctx->data.'+col['name']+'_len* sizeof(rowreq_ctx->data.'+col['name']+'[0]));\n'
+                else:
+                    tableDataGetString += '(*' + col['name'] + '_val_ptr) = rowreq_ctx->data.' + col['name'] + ';\n'
                 tableDataGetString += 'return MFD_SUCCESS;\n'
                 tableDataGetString += '}\n\n'
             self.fileWriter.fileWrite(fileName=tableName + '_data_get.c',data=tableDataGetString)
@@ -1596,13 +1753,32 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataGetHeaderString = '#ifndef ' + tableName.upper() + '_DATA_GET_H\n'
             tableDataGetHeaderString += '#define ' + tableName.upper() + '_DATA_GET_H\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx,' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' *' + col['name'] + '_val_ptr);\n'
+                colType = self.getObjTypeString(col['syntax'])
+                if colType == 'OctetString':
+                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx, char **' + col['name'] + '_val_ptr_ptr, size_t *'+col['name']+'_val_ptr_len_ptr);\n\n'
+                elif colType == 'ObjectIdentifier':
+                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx, oid **' + col['name'] + '_val_ptr_ptr, size_t *'+col['name']+'_val_ptr_len_ptr);\n\n'
+                else: 
+                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx,' + self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n\n'
             tableDataGetHeaderString += 'int ' + tableName + '_indexes_set_tbl_idx(' + tableName + '_mib_index *tbl_idx'
             for idx in indexes:
-                tableDataGetHeaderString += ', ' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + '_val'
-            tableDataGetHeaderString += ');\n'
+                idxType = self.getObjTypeString(idx['syntax'])
+                if idxType == 'OctetString':
+                    tableDataGetHeaderString += ', char *'+idx['name']+'_val_ptr, size_t '+idx['name']+'_val_ptr_len'
+                elif idxType == 'ObjectIdentifier':
+                    tableDataGetHeaderString += ', oid *'+idx['name']+'_val_ptr, size_t '+idx['name']+'_val_ptr_len'
+                else:
+                    tableDataGetHeaderString += ', ' + self.ctypeClasses[idxType] + ' ' + idx['name'] + '_val'
+            tableDataGetHeaderString += ');\n\n'
             tableDataGetHeaderString += 'int ' + tableName + '_indexes_set(' + tableName + '_rowreq_ctx *rowreq_ctx'
-            tableDataGetHeaderString += ', ' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + '_val'
+            for idx in indexes:
+                idxType = self.getObjTypeString(idx['syntax'])
+                if idxType == 'OctetString':
+                    tableDataGetHeaderString += ', char *'+idx['name']+'_val_ptr, size_t '+idx['name']+'_val'
+                elif idxType == 'ObjectIdentifier':
+                    tableDataGetHeaderString += ', oid *'+idx['name']+'_val_ptr, size_t '+idx['name']+'_val'
+                else:
+                    tableDataGetHeaderString += ', ' + self.ctypeClasses[idxType] + ' ' + idx['name'] + '_val'
             tableDataGetHeaderString += ');\n'
             tableDataGetHeaderString += '#endif\n'
             self.fileWriter.fileWrite(fileName=tableName + '_data_get.h',data=tableDataGetHeaderString)
@@ -1690,26 +1866,76 @@ class NetSnmpCodeGen(AbstractCodeGen):
             for idx in indexes:
                 dbIdx = self.jsonData[tableName]['Indexes'][idx['name']]
                 idxTable = dbIdx['OvsTable']
+                idxType = self.getObjTypeString(idx['syntax'])
                 if not idxTable:
-                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row) {\n'
-                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ret = NULL;\n'
-                    tableOvsdbGetString += 'return ret\n'
+                    tableOvsdbGetString += 'void ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
+                    if idxType == 'OctetString':
+                        tableOvsdbGetString += 'char *'+idx['name']+'_val_ptr, size_t* '+idx['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += '*'+idx['name'] + '_val_ptr = NULL;\n'
+                        tableOvsdbGetString += '*'+idx['name'] + '_val_ptr_len = 0;\n'
+                    elif idxType == 'ObjectIdentifier':
+                        tableOvsdbGetString += 'oid *' +idx['name'] +'_val_ptr, size_t* '+idx['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += '*'+idx['name'] + '_val_ptr = NULL;\n'
+                        tableOvsdbGetString += '*'+idx['name'] + '_val_ptr_len = 0;\n'
+                    else:
+                        tableOvsdbGetString += self.ctypeClasses[idxType] + ' *'+idx['name']+'_val_ptr) {\n'
+                        tableOvsdbGetString += '*'+idx['name'] + '_val_ptr = NULL;\n'
                     tableOvsdbGetString += '}\n\n'
                 elif idxTable != rootDbTable:
-                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row) {\n'
-                    tableOvsdbGetString += 'return (' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ')'
-                    if dbIdx['Type']['Key']:
-                        tableOvsdbGetString += 'smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                    tableOvsdbGetString += 'void ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row, '
+                    if idxType == 'OctetString':
+                        tableOvsdbGetString += 'char *'+idx['name']+'_val_ptr, size_t* '+idx['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += 'char *temp = (char*)'
+                        if dbIdx['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += idxTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                        tableOvsdbGetString += '*'+idx['name'] + '_val_ptr_len = strlen(temp);\n'
+                        tableOvsdbGetString += 'memcpy('+idx['name']+'_val_ptr'+', temp, strlen(temp));\n'
+                    elif idxType == 'ObjectIdentifier':
+                        tableOvsdbGetString += 'oid *' +idx['name'] +'_val_ptr, size_t* '+idx['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += 'oid *temp = (oid*)'
+                        if dbIdx['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += idxTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                        tableOvsdbGetString += '*'+idx['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
+                        tableOvsdbGetString += 'memcpy('+idx['name']+'_val_ptr'+', temp, MAX_OID_LEN);\n'
                     else:
-                        tableOvsdbGetString += idxTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
-                    tableOvsdbGetString += '}\n\n' 
+                        tableOvsdbGetString += self.ctypeClasses[idxType] + ' *'+idx['name']+'_val_ptr) {\n'
+                        tableOvsdbGetString += '*'+idx['name'] + '_val_ptr_len = '
+                        if dbIdx['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += idxTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                    tableOvsdbGetString += '}\n\n'
                 else:
-                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row) {\n'
-                    tableOvsdbGetString += 'return (' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ')'
-                    if dbIdx['Type']['Key']:
-                        tableOvsdbGetString += 'smap_get(' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                    tableOvsdbGetString += 'void ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
+                    if idxType == 'OctetString':
+                        tableOvsdbGetString += 'char *'+idx['name']+'_val_ptr, size_t* '+idx['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += 'char *temp = (char*)'
+                        if dbIdx['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(' + rootDbTable + '_row->' +   dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += rootDbTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                        tableOvsdbGetString += '*'+idx['name'] + '_val_ptr_len = strlen(temp);\n'
+                        tableOvsdbGetString += 'memcpy('+idx['name']+'_val_ptr'+', temp, strlen(temp));\n'
+                    elif idxType == 'ObjectIdentifier':
+                        tableOvsdbGetString += 'oid *' +idx['name'] +'_val_ptr, size_t* '+idx['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += 'oid *temp = (oid*)'
+                        if dbIdx['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += rootDbTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                        tableOvsdbGetString += '*'+idx['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
+                        tableOvsdbGetString += 'memcpy('+idx['name']+'_val_ptr'+', temp, MAX_OID_LEN);\n'
                     else:
-                        tableOvsdbGetString += rootDbTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                        tableOvsdbGetString += self.ctypeClasses[idxType] + ' *'+idx['name']+'_val_ptr) {\n'
+                        tableOvsdbGetString += '*'+idx['name'] + '_val_ptr = ('+self.ctypeClasses[idxType]+')'
+                        if dbIdx['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(' + rootDbTable + '_row->' +   dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += rootDbTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
                     tableOvsdbGetString += '}\n\n'
             tableOvsdbGetString += '\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
@@ -1717,26 +1943,77 @@ class NetSnmpCodeGen(AbstractCodeGen):
                     continue
                 dbCol = self.jsonData[tableName]['Columns'][col['name']]
                 colTable = dbCol['OvsTable']
+                colType = self.getObjTypeString(col['syntax'])
                 if not colTable:
-                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row) {\n'
-                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ret = NULL;\n'
-                    tableOvsdbGetString += 'return ret\n'
+                    tableOvsdbGetString += 'void ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
+                    if colType == 'OctetString':
+                        tableOvsdbGetString += 'char *'+col['name']+'_val_ptr, size_t* '+col['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += '*'+col['name'] + '_val_ptr = NULL;\n'
+                        tableOvsdbGetString += '*'+col['name'] + '_val_ptr_len = 0;\n'
+                    elif colType == 'ObjectIdentifier':
+                        tableOvsdbGetString += 'oid *' +col['name'] +'_val_ptr, size_t* '+col['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += '*'+col['name'] + '_val_ptr = NULL;\n'
+                        tableOvsdbGetString += '*'+col['name'] + '_val_ptr_len = 0;\n'
+                    else:
+                        tableOvsdbGetString += self.ctypeClasses[colType] + ' *'+col['name']+'_val_ptr) {\n'
+                        tableOvsdbGetString += '*'+col['name'] + '_val_ptr = NULL;\n'
+                    tableOvsdbGetString += '\n'
                     tableOvsdbGetString += '}\n\n'
                 elif colTable != rootDbTable:
-                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row) {\n'
-                    tableOvsdbGetString += 'return (' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ')'
-                    if dbCol['Type']['Key']:
-                        tableOvsdbGetString += 'smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                    tableOvsdbGetString += 'void ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row, '
+                    if colType == 'OctetString':
+                        tableOvsdbGetString += 'char *'+col['name']+'_val_ptr, size_t* '+col['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += 'char *temp = (char*)'
+                        if dbCol['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += colTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                        tableOvsdbGetString += '*'+col['name'] + '_val_ptr_len = strlen(temp);\n'
+                        tableOvsdbGetString += 'memcpy('+col['name']+'_val_ptr'+', temp, strlen(temp));\n'
+                    elif colType == 'ObjectIdentifier':
+                        tableOvsdbGetString += 'oid *' +col['name'] +'_val_ptr, size_t* '+col['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += 'oid *temp = (oid*)'
+                        if dbCol['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += colTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                        tableOvsdbGetString += '*'+col['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
+                        tableOvsdbGetString += 'memcpy('+col['name']+'_val_ptr'+', temp, MAX_OID_LEN);\n'
                     else:
-                        tableOvsdbGetString += colTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                        tableOvsdbGetString += self.ctypeClasses[colType] + ' *'+col['name']+'_val_ptr) {\n'
+                        tableOvsdbGetString += '*'+col['name'] + '_val_ptr = ('+self.ctypeClasses[colType]+')'
+                        if dbCol['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += colTable + '_row->' + dbCol['OvsColumn'] + ';\n'
                     tableOvsdbGetString += '}\n\n'
                 else:
-                    tableOvsdbGetString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row) {\n'
-                    tableOvsdbGetString += 'return (' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ')'
-                    if dbCol['Type']['Key']:
-                        tableOvsdbGetString += 'smap_get(' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                    tableOvsdbGetString += 'void ovsdb_get_' + col['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
+                    if colType == 'OctetString':
+                        tableOvsdbGetString += 'char *'+col['name']+'_val_ptr, size_t* '+col['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += 'char *temp = (char*)'
+                        if dbCol['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(' + rootDbTable + '_row->' +   dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += rootDbTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                        tableOvsdbGetString += '*'+col['name'] + '_val_ptr_len = strlen(temp);\n'
+                        tableOvsdbGetString += 'memcpy('+col['name']+'_val_ptr'+', temp, strlen(temp));\n'
+                    elif colType == 'ObjectIdentifier':
+                        tableOvsdbGetString += 'oid *' +col['name'] +'_val_ptr, size_t* '+col['name']+'_val_ptr_len) {\n'
+                        tableOvsdbGetString += 'oid *temp = (oid*)'
+                        if dbCol['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += rootDbTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                        tableOvsdbGetString += '*'+col['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
+                        tableOvsdbGetString += 'memcpy('+col['name']+'_val_ptr'+', temp, MAX_OID_LEN);\n'
                     else:
-                        tableOvsdbGetString += rootDbTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                        tableOvsdbGetString += self.ctypeClasses[colType] + ' *'+col['name']+'_val_ptr) {\n'
+                        tableOvsdbGetString += '*'+col['name'] + '_val_ptr = ('+self.ctypeClasses[colType]+')'
+                        if dbCol['Type']['Key']:
+                            tableOvsdbGetString += 'smap_get(' + rootDbTable + '_row->' +   dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                        else:
+                            tableOvsdbGetString += rootDbTable + '_row->' + dbCol['OvsColumn'] + ';\n'
                     tableOvsdbGetString += '}\n\n'
             self.fileWriter.fileWrite(fileName=tableName + '_ovsdb_get.c',data=tableOvsdbGetString)
             
@@ -1745,6 +2022,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             for idx in indexes:
                 dbIdx = self.jsonData[tableName]['Indexes'][idx['name']]
                 idxTable = dbIdx['OvsTable']
+                idxType = self.getObjTypeString(idx['syntax'])
                 if not idxTable:
                     tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row);\n'
                 elif idxTable != rootDbTable:
@@ -1753,7 +2031,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                     tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row);\n'
             tableOvsdbGetHeaderString += '\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in [idx['name'] for idx in indexes]:
+                if col['name'] in self.tableRows[self.tables[tableName]['row']]['index']:
                     continue
                 dbCol = self.jsonData[tableName]['Columns'][col['name']]
                 colTable = dbCol['OvsTable']
@@ -1983,10 +2261,18 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += 'int rc = SNMPERR_SUCCESS;\n'
             tableInterfaceString += 'switch(column) {\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+                if col['name'] in self.tableRows[self.tables[tableName]['row']]['index']:
+                    continue
                 tableInterfaceString += 'case COLUMN_' + col['name'].upper() + ':\n'
-                tableInterfaceString += 'var->val_len = sizeof(' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ');\n'
                 tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(col['syntax'])] + ';\n'
-                tableInterfaceString += 'rc = ' + col['name'] + '_get(rowreq_ctx, (' + self.ctypeClasses[self.getObjTypeString(col['syntax'])] + '*)var->val.string);\n'
+                colType = self.getObjTypeString(col['syntax'])
+                if colType == 'OctetString':
+                    tableInterfaceString += 'rc = '+col['name']+'_get(rowreq_ctx, (char **)&var->val.string, &var->val_len);\n'
+                elif colType == 'ObjectIdentifier':
+                    tableInterfaceString += 'rc = '+col['name']+'_get(rowreq_ctx, (oid **)&var->val.string, &var->val_len);\n'
+                else:
+                    tableInterfaceString += 'var->val_len = sizeof(' + self.ctypeClasses[colType] + ');\n'
+                    tableInterfaceString += 'rc = ' + col['name'] + '_get(rowreq_ctx, (' + self.ctypeClasses[colType] + '*)var->val.string);\n'
                 tableInterfaceString += 'break;\n'
             tableInterfaceString += 'default:\n'
             tableInterfaceString += 'break;\n'
