@@ -28,12 +28,15 @@ class CFileWriter(AbstractWriter):
         fileName = os.path.join(self._path,decode(fileName))
 
         try:
+            if 'custom.c' in fileName or 'custom.h' in fileName:
+                return
             fd, tfile = tempfile.mkstemp(dir = self._path)
             os.write(fd, encode(data))
             os.close(fd)
             if(os.path.isfile(fileName)):
                 os.remove(fileName)
             os.rename(tfile, fileName)
+            fd, 
         except (OSError, IOError, UnicodeEncodeError):
             exc = sys.exc_info()
             try:

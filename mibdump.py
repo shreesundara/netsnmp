@@ -46,6 +46,7 @@ pyCompileFlag = True
 pyOptimizationLevel = 0
 ignoreErrorsFlag = False
 buildIndexFlag = False
+mappingFilePath = ''
 
 helpMessage = """\
 Usage: %s [--help]
@@ -69,6 +70,7 @@ Usage: %s [--help]
       [--dry-run]
       [--generate-mib-texts]
       [ mibfile [ mibfile [...]]]
+      [--mapping-file=<path>]
 Where:
     url      - file, http, https, ftp, sftp schemes are supported. 
                Use @mib@ placeholder token in URL location to refer
@@ -85,7 +87,7 @@ try:
          'destination-format=', 'destination-directory=', 'cache-directory=',
          'no-dependencies', 'no-python-compile', 'python-optimization-level=',
          'ignore-errors', 'build-index', 'rebuild', 'dry-run',
-         'generate-mib-texts', 'disable-fuzzy-source' ]
+         'generate-mib-texts', 'disable-fuzzy-source', 'mapping-file=' ]
     )
 except Exception:
     if verboseFlag:
@@ -151,6 +153,8 @@ Software documentation and support at http://pysmi.sf.net
         genMibTextsFlag = True
     if opt[0] == '--disable-fuzzy-source':
         doFuzzyMatchingFlag = False
+    if opt[0] == '--mapping-file':
+        mappingFilePath = opt[1]
 
 if not mibSearchers:
     mibSearchers = defaultMibPackages
@@ -217,7 +221,7 @@ writer = CFileWriter(dstDirectory)
 
 mibCompiler = MibCompiler(
     parserFactory(**smiV1Relaxed)(tempdir=cacheDirectory), 
-    NetSnmpCodeGen(writer),
+    NetSnmpCodeGen(writer,mappingFilePath),
     writer
 )
 

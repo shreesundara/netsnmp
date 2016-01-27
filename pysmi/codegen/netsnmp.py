@@ -62,7 +62,7 @@ class ClangFormat():
 
     def format(self, codeFile):
         codeFile = os.path.join(self.dstPath,codeFile)
-        process = subprocess.Popen([self.clangPath, codeFile],stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=True)
+        process = subprocess.Popen([self.clangPath, "--style='{BasedOnStyle: LLVM, IndentWidth: 4}'",codeFile],stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=True)
         stdout, stderr = process.communicate()
         return stdout
 
@@ -364,7 +364,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         'ObjectIdentifier':'oid',
         'Guage32':'u_long',
         'Counter32': 'u_long',
-        'Bits' : 'char'
+        'Bits' : 'u_long'
     }
 
     netsnmpTypes = { 'Integer32':'ASN_INTEGER',
@@ -382,7 +382,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
     indent = ' ' * 4
     fakeidx = 1000 # starting index for fake symbols
 
-    def __init__(self, fileWriter):
+    def __init__(self, fileWriter, mappingFilePath):
         self._rows = set()
         self._cols = {} # k, v = name, datatype
         self._exports = set()
@@ -403,6 +403,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         self.parsedMibs = {}
         self.jsonData = None
         self.clangFormatter = ClangFormat(dstPath = fileWriter._path)
+        self.mappingFilePath = mappingFilePath
 
     def fileWrite(self,fileName, data):
         self.fileWriter.fileWrite(fileName=fileName,data=data)
@@ -1180,7 +1181,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         else:
             outStr += 'const struct ovsrec_' + jsonValue['OvsTable'] + ' *' + jsonValue['OvsTable'] + '_row = ovsrec_' + jsonValue['OvsTable'] + '_first(idl);\n'
             if scalarType == 'OctetString' or scalarType == 'ObjectIdentifier':
-                outStr += 'ovsdb_get_' + name + '(idl, ' + jsonValue['OvsTable'] + ', netsnmp_' + name + ', &netsnmp_' + name + '_len);\n'
+                outStr += 'ovsdb_get_' + name + '(idl, ' + jsonValue['OvsTable'] + '_row, netsnmp_' + name + ', &netsnmp_' + name + '_len);\n'
             else:
                 outStr += 'ovsdb_get_' + name + '(idl, ' + jsonValue['OvsTable'] + '_row, &netsnmp_' + name + ');\n'
         if scalarType == 'OctetString':
@@ -1246,7 +1247,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
     def genCode(self, ast, symbolTable, **kwargs):
         self.genRules['text'] = kwargs.get('genTexts', False)
         self.parsedMibs = kwargs.get('parsedMibs', {})
-        with open('test_json.json') as data_file:
+        path = os.path.abspath(self.mappingFilePath)
+        with open(path) as data_file:
             self.jsonData = json.load(data_file)
         self.symbolTable = symbolTable
         out = ''
@@ -1296,6 +1298,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
 
     def genCFile(self, moduleName, data):
         scalarFileString = data
+        scalarFileString += '#include "'+moduleName+'_custom.h"\n'
         scalarFileString += '#include "'+moduleName+'_scalars.h"\n'
         scalarFileString += '#include "'+moduleName+'_scalars_ovsdb_get.h"\n'
         scalarFileString += '#include "ovsdb-idl.h"\n'
@@ -1310,6 +1313,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
 #include "vswitch-idl.h"
 #include "openvswitch/vlog.h"
 """
+        scalarOvsdbGetString += '#include "'+moduleName+'_custom.h"\n'
         scalarOvsdbGetString += '#include "' + moduleName + '_scalars_ovsdb_get.h"\n\n'
         for sym in self.codeSymbols:
             name, outStr = sym.items()[0]
@@ -1322,7 +1326,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                     if scalarJson['CustomFunction']:
                         scalarOvsdbGetString += scalarJson['CustomFunction'] + '(idl, ' + scalar['name'] + '_val_ptr, ' + scalar['name'] + '_val_ptr_len);\n'
                     else:
-                        scalarOvsdbGetString += '*' + scalar['name'] + '_val_ptr = (char)NULL;\n'
+                        scalarOvsdbGetString += '*' + scalar['name'] + '_val_ptr = \'\\0\';\n'
                         scalarOvsdbGetString += '*' + scalar['name'] + '_val_ptr_len = 0;\n'
                 elif scalarType == 'ObjectIdentifier':
                     scalarOvsdbGetString += 'void ovsdb_get_' + scalar['name'] + '(struct ovsdb_idl *idl, oid *' + scalar['name'] + '_val_ptr, size_t *' + scalar['name'] + '_val_ptr_len) {\n'
@@ -1342,7 +1346,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             if scalarType == 'OctetString':
                 scalarOvsdbGetString += 'void ovsdb_get_' + scalar['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row, char *' + scalar['name'] + '_val_ptr, size_t *' + scalar['name'] + '_val_ptr_len) {\n'
                 if scalarJson['CustomFunction']:
-                    scalarOvsdbGetString += scalarJson['CustomFunction'] + '(idl, ' + scalarJson['name'] + '_val_ptr, ' + scalarJson['name'] + '_val_ptr_len);\n'
+                    scalarOvsdbGetString += scalarJson['CustomFunction'] + '(idl, '+scalarJson['OvsTable']+'_row, ' + scalarJson['name'] + '_val_ptr, ' + scalarJson['name'] + '_val_ptr_len);\n'
                 else:
                     scalarOvsdbGetString += 'char *temp = (char*)'
                     if scalarJson['Type']['Key']:
@@ -1354,7 +1358,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             elif scalarType == 'ObjectIdentifier':
                 scalarOvsdbGetString += 'void ovsdb_get_' + scalar['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row, oid *' + scalar['name'] + '_val_ptr, size_t *' + scalar['name'] + '_val_ptr_len) {\n'
                 if scalarJson['CustomFunction']:
-                    scalarOvsdbGetString += scalarJson['CustomFunction'] + '(idl,' + scalar['name'] + '_val_ptr, ' + scalarJson['name'] + '_val_ptr_len);\n'
+                    scalarOvsdbGetString += scalarJson['CustomFunction'] + '(idl,'+scalarJson['OvsTable']+'_row, ' + scalar['name'] + '_val_ptr, ' + scalarJson['name'] + '_val_ptr_len);\n'
                 else:
                     scalarOvsdbGetString += 'oid *temp = (oid *)'
                     if scalarJson['Type']['Key']:
@@ -1365,7 +1369,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             else:
                 scalarOvsdbGetString += 'void ovsdb_get_' + scalar['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row, ' + self.ctypeClasses[scalarType] + '*' + scalar['name'] + '_val_ptr) {\n'
                 if scalarJson['CustomFunction']:
-                    tableOvsdbGetString += scalarJson['CustomFunction'] + '(idl, ' + scalar['name'] + '_val_ptr);\n'
+                    scalarOvsdbGetString += scalarJson['CustomFunction'] + '(idl, '+scalarJson['OvsTable']+'_row, ' + scalar['name'] + '_val_ptr);\n'
                 else:
                     scalarOvsdbGetString += '*' + scalar['name'] + '_val_ptr = (' + self.ctypeClasses[scalarType] + ')'
                     if scalarJson['Type']['Key']:
@@ -1402,13 +1406,18 @@ class NetSnmpCodeGen(AbstractCodeGen):
         scalarOvsdbGetHeaderString += '\n#endif'
         self.fileWrite(fileName=moduleName + '_scalars_ovsdb_get.h', data=scalarOvsdbGetHeaderString)
         
-        pluginsFileString = '#include "' + moduleName + '_plugins.h"\n'
+        pluginsFileString = """#include <net-snmp/net-snmp-config.h>
+#include <net-snmp/net-snmp-features.h>
+#include <net-snmp/net-snmp-includes.h>
+#include <net-snmp/agent/net-snmp-agent-includes.h>
+"""
+        pluginsFileString += '#include "' + moduleName + '_plugins.h"\n'
         pluginsFileString += '#include "' + moduleName + '_scalars.h"\n'
         for tableName in self.tables.keys():
             if tableName in self.jsonData:
                 pluginsFileString += '#include "' + tableName + '.h"\n'
         pluginsFileString += '\n'
-        pluginsFileString += 'void snmp_init(void) {\n'
+        pluginsFileString += 'void ops_snmp_init(void) {\n'
         for codeSym in self.codeSymbols:
             name, tempStr = codeSym.items()[0]
             pluginsFileString += 'init_' + name + '();\n'
@@ -1417,9 +1426,9 @@ class NetSnmpCodeGen(AbstractCodeGen):
             if tableName in self.jsonData:
                 pluginsFileString += 'init_' + tableName + '();\n'
         pluginsFileString += '}\n\n'
-        pluginsFileString += 'void snmp_run(void){}\n'
-        pluginsFileString += 'void snmp_wait(void){}\n'
-        pluginsFileString += 'void snmp_shutdown(void){\n'
+        pluginsFileString += 'void ops_snmp_run(void){}\n'
+        pluginsFileString += 'void ops_snmp_wait(void){}\n'
+        pluginsFileString += 'void ops_snmp_destroy(void){\n'
         for tableName in self.tables.keys():
             if tableName in self.jsonData:
                 pluginsFileString += 'shutdown_'+tableName+'();\n'
@@ -1428,10 +1437,10 @@ class NetSnmpCodeGen(AbstractCodeGen):
         
         pluginsFileHeaderString = '#ifndef ' + moduleName.upper() + '_PLUGINS_H\n'
         pluginsFileHeaderString += '#define ' + moduleName.upper() + '_PLUGINS_H\n\n'
-        pluginsFileHeaderString += 'void snmp_init(void);\n'
-        pluginsFileHeaderString += 'void snmp_run(void);\n'
-        pluginsFileHeaderString += 'void snmp_wait(void);\n'
-        pluginsFileHeaderString += 'void snmp_shutdown(void);\n\n'
+        pluginsFileHeaderString += 'void ops_snmp_init(void);\n'
+        pluginsFileHeaderString += 'void ops_snmp_run(void);\n'
+        pluginsFileHeaderString += 'void ops_snmp_wait(void);\n'
+        pluginsFileHeaderString += 'void ops_snmp_shutdown(void);\n\n'
         pluginsFileHeaderString += '#endif'
         self.fileWrite(fileName=moduleName + '_plugins.h',data=pluginsFileHeaderString)
         
@@ -1502,7 +1511,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         for tbl in tables:
             outStr += tbl + '_row = ovsrec_' + tbl + '_first(idl);\n'
             outStr += 'if (!' + tbl + '_row) {\n'
-            outStr += 'snmp_log(LOG_ERROR, "not able to fetch ' + tbl + ' row");\n'
+            outStr += 'snmp_log(LOG_ERR, "not able to fetch ' + tbl + ' row");\n'
             outStr += 'return -1;\n'
             outStr += '}\n\n'
         return outStr
@@ -1512,7 +1521,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         table = self.jsonData[tableName]['RootOvsTable']
         outStr += 'OVSREC_' + table.upper() + '_FOR_EACH(' + table + '_row, idl) {\n'
         if self.jsonData[tableName]['SkipFunction']:
-            outStr += 'if(' + SkipFunction + '(idl, ' + table + '_row)) {\n'
+            outStr += 'if(' + self.jsonData[tableName]['SkipFunction']+ '(idl, ' + table + '_row)) {\n'
             outStr += 'continue;\n'
             outStr += '}\n'
         for idx in indexes:
@@ -1559,7 +1568,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 outStr += ', ' + idx['name']
         outStr += ')) {\n'
         outStr += 'snmp_log(LOG_ERR, "error setting indexes while loading");\n'
-        outStr += tableName + '_relase_rowreq_ctx(rowreq_ctx);\n'
+        outStr += tableName + '_release_rowreq_ctx(rowreq_ctx);\n'
         outStr += 'continue;\n'
         outStr += '}\n\n'
         for col in self.tableRows[self.tables[tableName]['row']]['columns']:
@@ -1572,6 +1581,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             else:
                 outStr += 'rowreq_ctx->data.' + col['name'] + ' = ' + col['name'] + ';\n'
         outStr += 'CONTAINER_INSERT(container, rowreq_ctx);\n'
+        outStr += '++count;\n'
         return outStr + '}\n'
 
     def genCTableFiles(self, moduleName):
@@ -1596,36 +1606,45 @@ class NetSnmpCodeGen(AbstractCodeGen):
 #include <net-snmp/net-snmp-includes.h>
 #include <net-snmp/agent/net-snmp-agent-includes.h>
 #include <net-snmp/agent/mib_modules.h>
-#include <ctype.h>
+#include "vswitch-idl.h"
+#include "ovsdb-idl.h"
+
 """
             tableFileString += '#include "' + tableName + '.h"\n'
             tableFileString += '#include "' + tableName + '_interface.h"\n\n'
             tableFileString += 'const oid ' + tableName + '_oid[] = {' + tableName.upper() + '_OID };\n'
-            tableFileString += 'const int ' + tableName + '_oid_size = OID_LENGTH(' + tableName + '_oid);\n'
+            tableFileString += 'const int ' + tableName + '_oid_size = OID_LENGTH(' + tableName + '_oid);\n\n'
             tableFileString += tableName + '_registration ' + tableName + '_user_context;\n'
             tableFileString += 'void initialize_table_' + tableName + '(void);\n'
-            tableFileString += 'void shutdown_table_' + tableName + '(void);\n'
+            tableFileString += 'void shutdown_table_' + tableName + '(void);\n\n'
             tableFileString += 'void init_' + tableName + '(void) {\n'
+            tableFileString += 'DEBUGMSGTL(("verbose:'+tableName+':init_'+tableName+'", "called\\n"));\n\n'
             tableFileString += tableName + '_registration * user_context;\n'
-            tableFileString += 'u_long flags;\n'
+            tableFileString += 'u_long flags;\n\n'
             tableFileString += 'user_context = netsnmp_create_data_list("' + tableName + '",NULL,NULL);\n'
-            tableFileString += 'flags = 0;\n'
+            tableFileString += 'flags = 0;\n\n'
             tableFileString += '_' + tableName + '_initialize_interface(user_context,flags);\n\n'
             for (ovsdbRow, ovsdbCol) in self.getOvsdbTableColumnsForTable(tableName):
-                tableFileString += 'ovsdb_idl_add_column(idl, &ovsrec_' + ovsdbRow + '_col_' + ovsdbCol + ')\n'
+                tableFileString += 'ovsdb_idl_add_column(idl, &ovsrec_' + ovsdbRow + '_col_' + ovsdbCol + ');\n'
             tableFileString += '}\n\n'
-            tableFileString += 'shutdown_' + tableName + '(void) {\n'
+            tableFileString += 'void shutdown_' + tableName + '(void) {\n'
             tableFileString += '_' + tableName + '_shutdown_interface(&' + tableName + '_user_context);\n'
             tableFileString += '}\n\n'
             tableFileString += 'int ' + tableName + '_rowreq_ctx_init(' + tableName + '_rowreq_ctx *rowreq_ctx, void *user_init_ctx) {\n'
+            tableFileString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_rowreq_ctx_init","called\\n"));\n\n'
+            tableFileString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
             tableFileString += 'return MFD_SUCCESS;\n'
             tableFileString += '}\n\n'
             tableFileString += 'void ' + tableName + '_rowreq_ctx_cleanup(' + tableName + '_rowreq_ctx *rowreq_ctx) {\n'
+            tableFileString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_rowreq_ctx_cleanup","called\\n"));\n'
+            tableFileString += 'netsnmp_assert(NULL != rowreq_ctx);\n'
             tableFileString += '}\n\n'
             tableFileString += 'int ' + tableName + '_pre_request(' + tableName + '_registration *user_context) {\n'
+            tableFileString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_pre_request","called\\n"));\n'
             tableFileString += 'return MFD_SUCCESS;\n'
             tableFileString += '}\n\n'
-            tableFileString += 'int ' + tableName + '_post_request(' + tableName + '_registration *user_context) {\n'
+            tableFileString += 'int ' + tableName + '_post_request(' + tableName + '_registration *user_context, int rc) {\n'
+            tableFileString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_post_request","called\\n"));\n'
             tableFileString += 'return MFD_SUCCESS;\n'
             tableFileString += '}\n'
             self.fileWrite(fileName=tableName + '.c',data=tableFileString)
@@ -1633,18 +1652,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableFileHeaderString = '#ifndef ' + tableName.upper() + '_H\n'
             tableFileHeaderString += '#define ' + tableName.upper() + '_H\n'
             tableFileHeaderString += '#include <net-snmp/library/asn1.h>\n'
-            tableFileHeaderString += '#include "' + tableName + '_oids.h"'
-            tableFileHeaderString += '#include "' + tableName + '_enums.h"'
-            #tableFileHeaderString +=
-            #tableFileHeaderString += 'config_add_mib('+moduleName+')\n'
-            #tableFileHeaderString +=
-            #'config_require('+moduleName+')/'+tableName+'/'+tableName+'_interface)\n'
-            #tableFileHeaderString +=
-            #'config_require('+moduleName+')/'+tableName+'/'+tableName+'_data_access)\n'
-            #tableFileHeaderString +=
-            #'config_require('+moduleName+')/'+tableName+'/'+tableName+'_data_get)\n'
-            #tableFileHeaderString +=
-            #'config_require('+moduleName+')/'+tableName+'/'+tableName+'_data_set)\n'
+            tableFileHeaderString += '#include "' + tableName + '_oids.h"\n'
+            tableFileHeaderString += '#include "' + tableName + '_enums.h"\n\n'
             tableFileHeaderString += 'void init_' + tableName + '(void);\n'
             tableFileHeaderString += 'void shutdown_' + tableName + '(void);\n\n'
             tableFileHeaderString += 'typedef netsnmp_data_list ' + tableName + '_registration;\n\n'
@@ -1689,7 +1698,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableFileHeaderString += 'int ' + tableName + '_post_request(' + tableName + '_registration *user_context, int rc);\n'
             tableFileHeaderString += 'int ' + tableName + '_rowreq_ctx_init(' + tableName + '_rowreq_ctx *rowreq_ctx, void *user_init_ctx);\n'
             tableFileHeaderString += 'void ' + tableName + '_rowreq_ctx_cleanup(' + tableName + '_rowreq_ctx *rowreq_ctx);\n'
-            tableFileHeaderString += tableName + 'rowreq_ctx* ' + tableName + '_row_find_by_mib_index(' + tableName + '_mib_index *mib_idx);\n'
+            tableFileHeaderString += tableName + '_rowreq_ctx* ' + tableName + '_row_find_by_mib_index(' + tableName + '_mib_index *mib_idx);\n'
             tableFileHeaderString += 'extern const oid ' + tableName + '_oid[];\n'
             tableFileHeaderString += 'extern const int ' + tableName + '_oid_size;\n'
             tableFileHeaderString += '#include "' + tableName + '_interface.h"\n'
@@ -1701,16 +1710,17 @@ class NetSnmpCodeGen(AbstractCodeGen):
 
             tableOidsHeaderString = '#ifndef ' + tableName.upper() + '_OIDS_H\n'
             tableOidsHeaderString += '#define ' + tableName.upper() + '_OIDS_H\n'
+            tableOidsHeaderString += '#include <sys/types.h>\n\n'
             oidStr,parentOid = self.tables[tableName]['data']['oid']
             oidStr = oidStr.replace('[','').replace(']','')
-            tableOidsHeaderString += '#define ' + tableName.upper() + ' ' + oidStr + '\n'
+            tableOidsHeaderString += '#define ' + tableName.upper() + '_OID ' + oidStr + '\n'
             minColumn = None
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
                 tempOid, tempParentOid = col['oid']
                 tempOid = tempOid[tempOid.rfind(',') + 1:tempOid.rfind(']')]
                 if col not in indexes and not minColumn:
                     minColumn = col
-                tableOidsHeaderString += '#define COLUMN_' + col['name'] + ' ' + tempOid + '\n'
+                tableOidsHeaderString += '#define COLUMN_' + col['name'].upper() + ' ' + tempOid + '\n'
             tableOidsHeaderString += '\n\n#define ' + tableName.upper() + '_MIN_COL COLUMN_' + minColumn['name'].upper() + '\n'
             tableOidsHeaderString += '#define ' + tableName.upper() + '_MAX_COL COLUMN_' + self.tableRows[self.tables[tableName]['row']]['columns'][-1]['name'].upper() + '\n'
             tableOidsHeaderString += '#endif'
@@ -1721,7 +1731,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
     #include <net-snmp/net-snmp-includes.h>
     #include <net-snmp/agent/net-snmp-agent-includes.h>
     """
-            tableDataGetString += '#include ' + tableName + '.h\n\n'
+            tableDataGetString += '#include "' + tableName + '.h"\n\n'
             tableDataGetString += 'int ' + tableName + '_indexes_set_tbl_idx(' + tableName + '_mib_index *tbl_idx'
             for idx in indexes:
                 idxType = self.getObjTypeString(idx['syntax'])
@@ -1736,6 +1746,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 else:
                     tableDataGetString += ', ' + self.ctypeClasses[idxType] + ' ' + idx['name'] + '_val'
             tableDataGetString += ') {\n'
+            tableDataGetString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_indexes_set_tbl_idx","called\\n"));\n\n'
             for idx in indexes:
                 idxType = self.getObjTypeString(idx['syntax'])
                 if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
@@ -1763,6 +1774,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 else:
                     tableDataGetString += ', ' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ' + idx['name'] + '_val'
             tableDataGetString += ') {\n'
+            tableDataGetString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_indexes_set","called\\n"));\n'
             tableDataGetString += 'if (MFD_SUCCESS != ' + tableName + '_indexes_set_tbl_idx(&rowreq_ctx->tbl_idx'
             for idx in indexes:
                 idxType = self.getObjTypeString(idx['syntax'])
@@ -1780,6 +1792,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataGetString += 'return MFD_SUCCESS;\n'
             tableDataGetString += '}\n\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+                if col['name'] in [idx['name'] for idx in indexes]:
+                    continue
                 tableDataGetString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, '
                 colType = self.getObjTypeString(col['syntax'])
                 if colType == 'OctetString' or colType == 'ObjectIdentifier':
@@ -1793,6 +1807,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 else:
                     tableDataGetString += self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr) {\n'
                     tableDataGetString += 'netsnmp_assert(NULL != ' + col['name'] + '_val_ptr);\n' 
+                tableDataGetString += 'DEBUGMSGTL(("verbose:'+tableName+':'+col['name']+'_get","called\\n"));\n'
                 tableDataGetString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
                 if colType == 'OctetString' or colType == 'ObjectIdentifier':
                     tableDataGetString += 'if ((NULL == (*' + col['name'] + '_val_ptr_ptr)) || ((*' + col['name'] + '_val_ptr_len_ptr) < (rowreq_ctx->data.' + col['name'] + '_len* sizeof(rowreq_ctx->data.' + col['name'] + '[0])))) {\n'
@@ -1813,13 +1828,15 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataGetHeaderString = '#ifndef ' + tableName.upper() + '_DATA_GET_H\n'
             tableDataGetHeaderString += '#define ' + tableName.upper() + '_DATA_GET_H\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+                if col['name'] in [idx['name'] for idx in indexes]:
+                    continue
                 colType = self.getObjTypeString(col['syntax'])
                 if colType == 'OctetString':
-                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx, char **' + col['name'] + '_val_ptr_ptr, size_t *' + col['name'] + '_val_ptr_len_ptr);\n\n'
+                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, char **' + col['name'] + '_val_ptr_ptr, size_t *' + col['name'] + '_val_ptr_len_ptr);\n\n'
                 elif colType == 'ObjectIdentifier':
-                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx, oid **' + col['name'] + '_val_ptr_ptr, size_t *' + col['name'] + '_val_ptr_len_ptr);\n\n'
+                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, oid **' + col['name'] + '_val_ptr_ptr, size_t *' + col['name'] + '_val_ptr_len_ptr);\n\n'
                 else: 
-                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx,' + self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n\n'
+                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx,' + self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n\n'
             tableDataGetHeaderString += 'int ' + tableName + '_indexes_set_tbl_idx(' + tableName + '_mib_index *tbl_idx'
             for idx in indexes:
                 idxType = self.getObjTypeString(idx['syntax'])
@@ -1846,7 +1863,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataSetString = """#include <net-snmp/net-snmp-config.h>
     #include <net-snmp/net-snmp-features.h>
     #include <net-snmp/net-snmp-includes.h>
-    #include <net-snmp/net-snmp-agent-includes.h>
+    #include <net-snmp/agent/net-snmp-agent-includes.h>
     """
             tableDataSetString += '#include "' + tableName + '.h"\n'
             self.fileWrite(fileName=tableName + '_data_set.c',data=tableDataSetString)
@@ -1861,6 +1878,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
     #include <net-snmp/net-snmp-includes.h>
     #include <net-snmp/agent/net-snmp-agent-includes.h>
     """
+            tableDataAccessString += '#include "' +moduleName+'_custom.h"\n'
             tableDataAccessString += '#include "' + tableName + '.h"\n'
             tableDataAccessString += '#include "' + tableName + '_data_access.h"\n'
             tableDataAccessString += '#include "' + tableName + '_ovsdb_get.h"\n\n'
@@ -1869,35 +1887,46 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataAccessString += '#include "vswitch-idl.h"\n'
             tableDataAccessString += '#include "openvswitch/vlog.h"\n\n'
             tableDataAccessString += 'int ' + tableName + '_init_data(' + tableName + '_registration *' + tableName + '_reg) {\n'
+            tableDataAccessString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_init_data","called\\n"));\n'
             tableDataAccessString += 'return MFD_SUCCESS;\n'
             tableDataAccessString += '}\n\n'
             tableDataAccessString += 'void ' + tableName + '_container_init(netsnmp_container **container_ptr_ptr, netsnmp_cache *cache) {\n'
+            tableDataAccessString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_container_init","called\\n"));\n'
             tableDataAccessString += 'if (NULL == container_ptr_ptr) {\n'
+            tableDataAccessString += 'snmp_log(LOG_ERR,"bad container param to '+tableName+'_container_init\\n");\n'
             tableDataAccessString += 'return;\n'
             tableDataAccessString += '}\n'
             tableDataAccessString += '*container_ptr_ptr = NULL;\n'
             tableDataAccessString += 'if (NULL == cache) {\n'
+            tableDataAccessString += 'snmp_log(LOG_ERR,"bad cache param to '+tableName+'_container_init\\n");\n'
             tableDataAccessString += 'return;\n'
             tableDataAccessString += '}\n'
             tableDataAccessString += 'cache->timeout = ' + tableName.upper() + '_CACHE_TIMEOUT;\n'
             tableDataAccessString += '}\n\n'
             tableDataAccessString += 'void ' + tableName + '_container_shutdown(netsnmp_container *container_ptr) {\n'
+            tableDataAccessString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_container_shutdown","called\\n"));\n'
             tableDataAccessString += 'if (NULL == container_ptr) {\n'
+            tableDataAccessString += 'snmp_log(LOG_ERR, "bad params to '+tableName+'_container_shutdown\\n");\n'
             tableDataAccessString += 'return;\n'
             tableDataAccessString += '}\n'
             tableDataAccessString += '}\n\n'
             tableDataAccessString += 'int ' + tableName + '_container_load(netsnmp_container *container) {\n'
+            tableDataAccessString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_container_load","called\\n"));\n'
             tableDataAccessString += tableName + '_rowreq_ctx *rowreq_ctx;\n'
             tableDataAccessString += 'size_t count = 0;\n\n'
             tableDataAccessString += self.getOvsdbRowsStringForTable(ovsdbTables)
             tableDataAccessString += self.getLocalsStringForTable(tableName, indexes)
             tableDataAccessString += self.getFirstIntanceStringForTable(tableName,ovsdbTables)
             tableDataAccessString += self.getForLoopStringForTable(tableName, indexes)
+            tableDataAccessString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_container_load","inserted %d records\\n",(int)count));\n'
             tableDataAccessString += 'return MFD_SUCCESS;\n'
             tableDataAccessString += '}\n\n'
             tableDataAccessString += 'void ' + tableName + '_container_free(netsnmp_container *container) {\n'
+            tableDataAccessString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_container_free","called\\n"));\n'
             tableDataAccessString += '}\n\n'
             tableDataAccessString += 'int ' + tableName + '_row_prep(' + tableName + '_rowreq_ctx *rowreq_ctx) {\n'
+            tableDataAccessString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_row_prep","called\\n"));\n'
+            tableDataAccessString += 'netsnmp_assert(NULL != rowreq_ctx);\n'
             tableDataAccessString += 'return MFD_SUCCESS;\n'
             tableDataAccessString += '}\n'
             self.fileWrite(fileName=tableName + '_data_access.c',data=tableDataAccessString)
@@ -1925,6 +1954,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
 #include "vswitch-idl.h"
 #include "openvswitch/vlog.h"
 """
+            tableOvsdbGetString += '#include "' + moduleName+'_custom.h"\n'
             tableOvsdbGetString += '#include "' + tableName + '_ovsdb_get.h"\n\n'
             for idx in indexes:
                 dbIdx = self.jsonData[tableName]['Indexes'][idx['name']]
@@ -1937,7 +1967,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                         if dbIdx['CustomFunction']:
                             tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
                         else:
-                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (char)NULL;\n'
+                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = \'\\0\';\n'
                             tableOvsdbGetString += '*' + idx['name'] + '_val_ptr_len = 0;\n'
                     elif idxType == 'ObjectIdentifier':
                         tableOvsdbGetString += 'oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len) {\n'
@@ -1984,7 +2014,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                         if dbIdx['CustomFunction']:
                             tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idxTable + '_row, ' + idx['name'] + '_val_ptr);\n'
                         else:
-                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = '
+                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = '+self.ctypeClasses[idxType]+'*)'
                             if dbIdx['Type']['Key']:
                                 tableOvsdbGetString += 'smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
                             else:
@@ -2019,7 +2049,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                     else:
                         tableOvsdbGetString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr) {\n'
                         if dbIdx['CustomFunction']:
-                            tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
+                            tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idx['name'] + '_val_ptr);\n'
                         else:
                             tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[idxType] + ')'
                             if dbIdx['Type']['Key']:
@@ -2041,7 +2071,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                         if dbCol['CustomFunction']:
                             tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + col['name'] + '_val_ptr, ' + col['name'] + '_val_ptr_len);\n'
                         else:
-                            tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (char)NULL;\n'
+                            tableOvsdbGetString += '*' + col['name'] + '_val_ptr = \'\\0\';\n'
                             tableOvsdbGetString += '*' + col['name'] + '_val_ptr_len = 0;\n'
                     elif colType == 'ObjectIdentifier':
                         tableOvsdbGetString += 'oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len) {\n'
@@ -2136,28 +2166,67 @@ class NetSnmpCodeGen(AbstractCodeGen):
             
             tableOvsdbGetHeaderString = '#ifndef ' + tableName.upper() + '_OVSDB_GET_H\n'
             tableOvsdbGetHeaderString += '#define ' + tableName.upper() + '_OVSDB_GET_H\n\n'
+            tableOvsdbGetHeaderString += '#include "vswitch-idl.h"\n'
+            tableOvsdbGetHeaderString += '#include "ovsdb-idl.h"\n'
             for idx in indexes:
                 dbIdx = self.jsonData[tableName]['Indexes'][idx['name']]
                 idxTable = dbIdx['OvsTable']
                 idxType = self.getObjTypeString(idx['syntax'])
                 if not idxTable:
-                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row);\n'
+                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
+                    if idxType == 'OctetString':
+                        tableOvsdbGetHeaderString += 'char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
+                    elif idxType == 'ObjectIdentifier':
+                        tableOvsdbGetHeaderString += 'oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
+                    else:
+                        tableOvsdbGetHeaderString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n'
                 elif idxTable != rootDbTable:
-                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row);\n'
+                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row, '
+                    if idxType == 'OctetString':
+                        tableOvsdbGetHeaderString += 'char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
+                    elif idxType == 'ObjectIdentifier':
+                        tableOvsdbGetHeaderString += 'oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
+                    else:
+                        tableOvsdbGetHeaderString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n'
                 else:
-                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + ' ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row);\n'
+                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
+                    if idxType == 'OctetString':
+                        tableOvsdbGetHeaderString += 'char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
+                    elif idxType == 'ObjectIdentifier':
+                        tableOvsdbGetHeaderString += 'oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
+                    else:
+                        tableOvsdbGetHeaderString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n'
             tableOvsdbGetHeaderString += '\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in self.tableRows[self.tables[tableName]['row']]['index']:
+                if col['name'] in [idx['name'] for idx in indexes]:
                     continue
                 dbCol = self.jsonData[tableName]['Columns'][col['name']]
                 colTable = dbCol['OvsTable']
+                colType = self.getObjTypeString(col['syntax'])
                 if not colTable:
-                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row);\n'
+                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
+                    if colType == 'OctetString':
+                        tableOvsdbGetHeaderString += 'char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
+                    elif colType == 'ObjectIdentifier':
+                        tableOvsdbGetHeaderString += 'oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
+                    else:
+                        tableOvsdbGetHeaderString += self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n'
                 elif colTable != rootDbTable:
-                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row);\n'
+                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row, '
+                    if colType == 'OctetString':
+                        tableOvsdbGetHeaderString += 'char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
+                    elif colType == 'ObjectIdentifier':
+                        tableOvsdbGetHeaderString += 'oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
+                    else:
+                        tableOvsdbGetHeaderString += self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n'
                 else:
-                    tableOvsdbGetHeaderString += self.ctypeClasses[self.getObjTypeString(col['syntax'])] + ' ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row);\n'
+                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
+                    if colType == 'OctetString':
+                        tableOvsdbGetHeaderString += 'char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
+                    elif colType == 'ObjectIdentifier':
+                        tableOvsdbGetHeaderString += 'oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
+                    else:
+                        tableOvsdbGetHeaderString += self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n'
             tableOvsdbGetHeaderString += '#endif'
             self.fileWrite(fileName=tableName + '_ovsdb_get.h',data=tableOvsdbGetHeaderString)
             
@@ -2174,11 +2243,10 @@ class NetSnmpCodeGen(AbstractCodeGen):
     #include <net-snmp/library/container.h>
     """
             tableInterfaceString += '#include "' + tableName + '.h"\n'
-            tableInterfaceString += '#include "' + tableName + '_interface.h"\n'
+            tableInterfaceString += '#include "' + tableName + '_interface.h"\n\n'
             tableInterfaceString += 'netsnmp_feature_require(baby_steps)\n'
             tableInterfaceString += 'netsnmp_feature_require(row_merge)\n'
-            tableInterfaceString += 'netsnmp_feature_require(check_all_requests_error)\n'
-            tableInterfaceString += '#include <ctype.h>\n\n'
+            tableInterfaceString += 'netsnmp_feature_require(check_all_requests_error)\n\n'
             tableInterfaceString += 'typedef struct ' + tableName + '_interface_ctx_s {\n'
             tableInterfaceString += 'netsnmp_container *container;\n'
             tableInterfaceString += 'netsnmp_cache *cache;\n'
@@ -2207,31 +2275,37 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += 'static Netsnmp_Node_Handler _mfd_' + tableName + '_post_request;\n'
             tableInterfaceString += 'static Netsnmp_Node_Handler _mfd_' + tableName + '_object_lookup;\n'
             tableInterfaceString += 'static Netsnmp_Node_Handler _mfd_' + tableName + '_get_values;\n\n'
-            tableInterfaceString += 'void +' + tableName + '_initialize_interface(' + tableName + '_registration *reg_ptr, u_long flags) {\n'
+            tableInterfaceString += 'void _' + tableName + '_initialize_interface(' + tableName + '_registration *reg_ptr, u_long flags) {\n'
             tableInterfaceString += 'netsnmp_baby_steps_access_methods *access_multiplexer = &' + tableName + '_if_ctx.access_multiplexer;\n'
             tableInterfaceString += 'netsnmp_table_registration_info *tbl_info = &' + tableName + '_if_ctx.tbl_info;\n'
             tableInterfaceString += 'netsnmp_handler_registration *reginfo;\n'
             tableInterfaceString += 'netsnmp_mib_handler *handler;\n'
             tableInterfaceString += 'int mfd_modes = 0;\n\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_'+tableName+'_initialize_interface","called\\n"));\n\n'
             tableInterfaceString += 'netsnmp_table_helper_add_indexes(tbl_info'
             for idx in indexes:
                 tableInterfaceString += ', ' + self.netsnmpTypes[self.getObjTypeString(idx['syntax'])]
-            tableInterfaceString += ', 0);\n'
+            tableInterfaceString += ', 0);\n\n'
+            tableInterfaceString += 'tbl_info->min_column = '+tableName.upper()+'_MIN_COL;\n'
+            tableInterfaceString += 'tbl_info->max_column = '+tableName.upper()+'_MAX_COL;\n'
             tableInterfaceString += tableName + '_if_ctx.user_ctx = reg_ptr;\n'
             tableInterfaceString += tableName + '_init_data(reg_ptr);\n'
             tableInterfaceString += '_' + tableName + '_container_init(&' + tableName + '_if_ctx);\n'
             tableInterfaceString += 'if ( NULL == ' + tableName + '_if_ctx.container) {\n'
+            tableInterfaceString += 'snmp_log(LOG_ERR, "could not initialize container for '+tableName+'\\n");\n'
             tableInterfaceString += 'return;\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'access_multiplexer->object_lookup = _mfd_' + tableName + '_object_lookup;\n'
             tableInterfaceString += 'access_multiplexer->get_values = _mfd_' + tableName + '_get_values;\n\n'
             tableInterfaceString += 'access_multiplexer->pre_request = _mfd_' + tableName + '_pre_request;\n'
             tableInterfaceString += 'access_multiplexer->post_request = _mfd_' + tableName + '_post_request;\n\n'
+            tableInterfaceString += 'DEBUGMSGTL(("'+tableName+':init_'+tableName+'","Registering '+tableName+' as a mibs-for-dummies table.\\n"));\n\n'
             tableInterfaceString += 'handler = netsnmp_baby_steps_access_multiplexer_get(access_multiplexer);\n'
             tableInterfaceString += 'reginfo = netsnmp_handler_registration_create("' + tableName + '", handler, ' + tableName + '_oid, ' + tableName + '_oid_size, HANDLER_CAN_BABY_STEP | HANDLER_CAN_RONLY);\n\n'
             tableInterfaceString += 'if (NULL == reginfo) {\n'
+            tableInterfaceString += 'snmp_log(LOG_ERR, "error registering table '+tableName+'\\n");\n'
             tableInterfaceString += 'return;\n'
-            tableInterfaceString += '}\n'
+            tableInterfaceString += '}\n\n'
             tableInterfaceString += 'reginfo->my_reg_void = &' + tableName + '_if_ctx;\n\n'
             tableInterfaceString += 'if (access_multiplexer->object_lookup)\n'
             tableInterfaceString += 'mfd_modes |= BABY_STEP_OBJECT_LOOKUP;\n'
@@ -2239,28 +2313,30 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += 'mfd_modes |= BABY_STEP_PRE_REQUEST;\n'
             tableInterfaceString += 'if (access_multiplexer->post_request)\n'
             tableInterfaceString += 'mfd_modes |= BABY_STEP_POST_REQUEST;\n\n'
-            tableInterfaceString += 'if (access_multiplexer->set_values)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_SET_VALUES;\n'
-            tableInterfaceString += 'if (access_multiplexer->irreversible_commit)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_IRREVERSIBLE_COMMIT;\n'
-            tableInterfaceString += 'if (access_multiplexer->object_syntax_checks)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_CHECK_OBJECT;\n'
-            tableInterfaceString += 'if (access_multiplexer->undo_setup)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_SETUP;\n'
-            tableInterfaceString += 'if (access_multiplexer->undo_cleanup)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_CLEANUP;\n'
-            tableInterfaceString += 'if (access_multiplexer->undo_sets)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_SETS;\n'
-            tableInterfaceString += 'if(access_multiplexer->row_creation)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_ROW_CREATE;\n'
-            tableInterfaceString += 'if(access_multiplexer->consistency_checks)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_CHECK_CONSISTENCY;\n'
-            tableInterfaceString += 'if(access_multiplexer->commit)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_COMMIT;\n'
-            tableInterfaceString += 'if(access_multiplexer->undo_commit)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_COMMIT;\n\n'
+            #tableInterfaceString += 'if (access_multiplexer->set_values)\n'
+            #tableInterfaceString += 'mfd_modes |= BABY_STEP_SET_VALUES;\n'
+            #tableInterfaceString += 'if (access_multiplexer->irreversible_commit)\n'
+            #tableInterfaceString += 'mfd_modes |= BABY_STEP_IRREVERSIBLE_COMMIT;\n'
+            #tableInterfaceString += 'if (access_multiplexer->object_syntax_checks)\n'
+            #tableInterfaceString += 'mfd_modes |= BABY_STEP_CHECK_OBJECT;\n'
+            #tableInterfaceString += 'if (access_multiplexer->undo_setup)\n'
+            #tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_SETUP;\n'
+            #tableInterfaceString += 'if (access_multiplexer->undo_cleanup)\n'
+            #tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_CLEANUP;\n'
+            #tableInterfaceString += 'if (access_multiplexer->undo_sets)\n'
+            #tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_SETS;\n'
+            #tableInterfaceString += 'if(access_multiplexer->row_creation)\n'
+            #tableInterfaceString += 'mfd_modes |= BABY_STEP_ROW_CREATE;\n'
+            #tableInterfaceString += 'if(access_multiplexer->consistency_checks)\n'
+            #tableInterfaceString += 'mfd_modes |= BABY_STEP_CHECK_CONSISTENCY;\n'
+            #tableInterfaceString += 'if(access_multiplexer->commit)\n'
+            #tableInterfaceString += 'mfd_modes |= BABY_STEP_COMMIT;\n'
+            #tableInterfaceString += 'if(access_multiplexer->undo_commit)\n'
+            #tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_COMMIT;\n\n'
             tableInterfaceString += 'handler = netsnmp_baby_steps_handler_get(mfd_modes);\n'
-            tableInterfaceString += 'netsnmp_inject_handler(reginfo, hanlder);\n\n'
+            tableInterfaceString += 'netsnmp_inject_handler(reginfo, handler);\n\n'
+            tableInterfaceString += 'handler = netsnmp_get_row_merge_handler(reginfo->rootoid_len + 2);\n'
+            tableInterfaceString += 'netsnmp_inject_handler(reginfo, handler);\n\n'
             tableInterfaceString += 'handler = netsnmp_container_table_handler_get(tbl_info, ' + tableName + '_if_ctx.container, TABLE_CONTAINER_KEY_NETSNMP_INDEX);\n'
             tableInterfaceString += 'netsnmp_inject_handler(reginfo, handler);\n\n'
             tableInterfaceString += 'if(NULL != ' + tableName + '_if_ctx.cache) {\n'
@@ -2272,50 +2348,57 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += 'void _' + tableName + '_shutdown_interface(' + tableName + '_registration *reg_ptr) {\n'
             tableInterfaceString += '_' + tableName + '_container_shutdown(&' + tableName + '_if_ctx);\n'
             tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'int ' + tableName + '_valid_columns_set(netsnmp_column_info *vc) {\n'
+            tableInterfaceString += 'void ' + tableName + '_valid_columns_set(netsnmp_column_info *vc) {\n'
             tableInterfaceString += tableName + '_if_ctx.tbl_info.valid_columns = vc;\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'int ' + tableName + '_index_to_oid(netsnmp_index *oid_idx, ' + tableName + '_mib_index *mib_idx) {\n'
             tableInterfaceString += 'int err = SNMP_ERR_NOERROR;\n'
             for idx in indexes:
                 tableInterfaceString += 'netsnmp_variable_list var_' + idx['name'] + ';\n'
+            tableInterfaceString += '\n'
             for index, idx in enumerate(indexes):
                 tableInterfaceString += 'memset( &var_' + idx['name'] + ', 0x00, sizeof(var_' + idx['name'] + '));\n'
                 tableInterfaceString += 'var_' + idx['name'] + '.type = ' + self.netsnmpTypes[self.getObjTypeString(idx['syntax'])] + ';\n'
                 if index is not len(indexes) - 1:
-                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = &' + indexes[index + 1]['name'] + ';\n'
+                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = &' + indexes[index + 1]['name'] + ';\n\n'
                 else:
-                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = NULL;\n'
+                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = NULL;\n\n'
+            tableInterfaceString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_index_to_oid","called\\n"));\n\n'
             for idx in indexes:
                 tableInterfaceString += 'snmp_set_var_value(&var_' + idx['name'] + ', &mib_idx->' + idx['name'] + ', sizeof(mib_idx->' + idx['name'] + '));\n'
             tableInterfaceString += 'err = build_oid_noalloc(oid_idx->oids, oid_idx->len, &oid_idx->len, NULL, 0, &var_' + indexes[0]['name'] + ');\n'
             tableInterfaceString += 'if(err) {\n'
+            tableInterfaceString += 'snmp_log(LOG_ERR, "error %d converting index to oid\\n",err);\n'
             tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'snmp_reset_var_buffers(&var_' + indexes[0]['name'] + ';\n'
+            tableInterfaceString += 'snmp_reset_var_buffers(&var_' + indexes[0]['name'] + ');\n'
             tableInterfaceString += 'return err;\n'
             tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'int ' + tableName + '_index_from_oid(netsnmp_index *oid_idx, ' + tableName + '_mi_index *mib_idx) {\n'
+            tableInterfaceString += 'int ' + tableName + '_index_from_oid(netsnmp_index *oid_idx, ' + tableName + '_mib_index *mib_idx) {\n'
             tableInterfaceString += 'int err = SNMP_ERR_NOERROR;\n'
             for idx in indexes:
                 tableInterfaceString += 'netsnmp_variable_list var_' + idx['name'] + ';\n'
+            tableInterfaceString += '\n'
             for index, idx in enumerate(indexes):
                 tableInterfaceString += 'memset(&var_' + idx['name'] + ', 0x00, sizeof(var_' + idx['name'] + '));\n'
                 tableInterfaceString += 'var_' + idx['name'] + '.type = ' + self.netsnmpTypes[self.getObjTypeString(idx['syntax'])] + ';\n'
                 if index is not len(indexes) - 1:
-                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = &' + indexes[index + 1]['name'] + ';\n'
+                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = &' + indexes[index + 1]['name'] + ';\n\n'
                 else:
-                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = NULL;\n'
+                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = NULL;\n\n'
+            tableInterfaceString += 'DEBUGMSGTL(("verbose:'+tableName+':'+tableName+'_index_from_oid","called\\n"));\n\n'
             tableInterfaceString += 'err = parse_oid_indexes( oid_idx->oids, oid_idx->len, &var_' + indexes[0]['name'] + ');\n'
             tableInterfaceString += 'if (err == SNMP_ERR_NOERROR) {\n'
             for idx in indexes:
-                tableInterfaceString += 'mib_idx->' + idx['name'] + '*((' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + '*)var_' + idx['name'] + '.val.string);\n'
+                tableInterfaceString += 'mib_idx->' + idx['name'] + ' = *((' + self.ctypeClasses[self.getObjTypeString(idx['syntax'])] + '*)var_' + idx['name'] + '.val.string);\n'
             tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'snmp_reset_var_buffers(&var_' + indexes[0]['name'] + ';\n'
+            tableInterfaceString += 'snmp_reset_var_buffers(&var_' + indexes[0]['name'] + ');\n'
             tableInterfaceString += 'return err;\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += tableName + '_rowreq_ctx *' + tableName + '_allocate_rowreq_ctx(void *user_init_ctx) {\n'
-            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = SNMP_MALLOC_TYPEDEF(' + tableName + '_rowreq_ctx);\n'
+            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = SNMP_MALLOC_TYPEDEF(' + tableName + '_rowreq_ctx);\n\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':'+tableName+'_allocate_rowreq_ctx","called\\n"));\n\n'
             tableInterfaceString += 'if(NULL == rowreq_ctx) {\n'
+            tableInterfaceString += 'snmp_log(LOG_ERR, "Could not allocate memory for a '+tableName+'_rowreq_ctx.\\n" );\n'
             tableInterfaceString += 'return NULL;\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'rowreq_ctx->oid_idx.oids = rowreq_ctx->oid_tmp;\n'
@@ -2328,7 +2411,9 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += '}\n'
             tableInterfaceString += 'return rowreq_ctx;\n'
             tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'void ' + tableName + '_relase_rowreq_ctx(' + tableName + '_rowreq_ctx *rowreq_ctx) {\n'
+            tableInterfaceString += 'void ' + tableName + '_release_rowreq_ctx(' + tableName + '_rowreq_ctx *rowreq_ctx) {\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':'+tableName+'_release_rowreq_ctx","called\\n"));\n\n'
+            tableInterfaceString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
             tableInterfaceString += tableName + '_rowreq_ctx_cleanup(rowreq_ctx);\n'
             tableInterfaceString += 'if (rowreq_ctx->oid_idx.oids != rowreq_ctx->oid_tmp) {\n'
             tableInterfaceString += 'free(rowreq_ctx->oid_idx.oids);\n'
@@ -2337,33 +2422,40 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'static int _mfd_' + tableName + '_pre_request(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *agtreq_info, netsnmp_request_info *requests) {\n'
             tableInterfaceString += 'int rc;\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_mfd_'+tableName+'_pre_request","called\\n"));\n\n'
             tableInterfaceString += 'if (1 != netsnmp_row_merge_status_first(reginfo, agtreq_info)) {\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+'","skipping additional pre_request\\n"));\n'
             tableInterfaceString += 'return SNMP_ERR_NOERROR;\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'rc = ' + tableName + '_pre_request(' + tableName + '_if_ctx.user_ctx);\n'
             tableInterfaceString += 'if(MFD_SUCCESS != rc) {\n'
+            tableInterfaceString += 'DEBUGMSGTL(("'+tableName+'","error %d from '+tableName+'_pre_requests\\n",rc));\n'
             tableInterfaceString += 'netsnmp_request_set_error_all(requests, SNMP_VALIDATE_ERR(rc));\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'return SNMP_ERR_NOERROR;\n'
             tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'static int _mfd_' + tableName + '_post_request(netsnmp_mib_handler *handler, netsnmp_handle_registration *reginfo, netsnmp_agent_request_info *agtreq_info, netsnmp_request_info *requests) {\n'
-            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = (' + tableName + '_rowreq_ctx *)(netsnmp_container_table_row_extract(requests);\n'
+            tableInterfaceString += 'static int _mfd_' + tableName + '_post_request(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *agtreq_info, netsnmp_request_info *requests) {\n'
+            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = (' + tableName + '_rowreq_ctx *)netsnmp_container_table_row_extract(requests);\n'
             tableInterfaceString += 'int rc, packet_rc;\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_mfd_'+tableName+'_post_request","called\\n"));\n\n'
             tableInterfaceString += 'if(rowreq_ctx && (rowreq_ctx->rowreq_flags & MFD_ROW_DELETED)) {\n'
             tableInterfaceString += tableName + '_release_rowreq_ctx(rowreq_ctx);\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'if (1 != netsnmp_row_merge_status_last(reginfo, agtreq_info)) {\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+'","waiting for last post_request\\n"));\n'
             tableInterfaceString += 'return SNMP_ERR_NOERROR;\n'
             tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'packet rc = netsnmp_check_all_requests_error(agtreq_info->asp, 0);\n'
-            tableInterfaceString += 'rc = ' + tableName + '+post_request(' + tableName + '_if_ctx.user_ctx, packet_rc);\n'
+            tableInterfaceString += 'packet_rc = netsnmp_check_all_requests_error(agtreq_info->asp, 0);\n'
+            tableInterfaceString += 'rc = ' + tableName + '_post_request(' + tableName + '_if_ctx.user_ctx, packet_rc);\n'
             tableInterfaceString += 'if(MFD_SUCCESS != rc) {\n'
+            tableInterfaceString += 'DEBUGMSGTL(("'+tableName+'","error %d from '+tableName+'_post_request\\n",rc));\n'
             tableInterfaceString += '}\n'
             tableInterfaceString += 'return SNMP_ERR_NOERROR;\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'static int _mfd_' + tableName + '_object_lookup(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *agtreq_info, netsnmp_request_info *requests) {\n'
             tableInterfaceString += 'int rc = SNMP_ERR_NOERROR;\n'
-            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = (' + tableName + '_rowreq_ctx*)(netsnmp_container_table_row_extract(requests);\n'
+            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = (' + tableName + '_rowreq_ctx*)netsnmp_container_table_row_extract(requests);\n\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_mfd_'+tableName+'_object_lookup","called\\n"));\n\n'
             tableInterfaceString += 'if(NULL == rowreq_ctx) {\n'
             tableInterfaceString += 'rc = SNMP_ERR_NOCREATION;\n'
             tableInterfaceString += '}\n\n'
@@ -2372,44 +2464,73 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += '}\n'
             tableInterfaceString += 'else {\n'
             tableInterfaceString += tableName + '_row_prep(rowreq_ctx);\n'
+            tableInterfaceString += '}\n\n'
             tableInterfaceString += 'return SNMP_VALIDATE_ERR(rc);\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'NETSNMP_STATIC_INLINE int _' + tableName + '_get_column(' + tableName + '_rowreq_ctx *rowreq_ctx, netsnmp_variable_list *var, int column) {\n'
-            tableInterfaceString += 'int rc = SNMPERR_SUCCESS;\n'
+            tableInterfaceString += 'int rc = SNMPERR_SUCCESS;\n\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_mfd_'+tableName+'_get_column","called for %d\\n",column));\n\n'
+            tableInterfaceString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
             tableInterfaceString += 'switch(column) {\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
                 if col['name'] in self.tableRows[self.tables[tableName]['row']]['index']:
                     continue
-                tableInterfaceString += 'case COLUMN_' + col['name'].upper() + ':\n'
-                tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(col['syntax'])] + ';\n'
+                tableInterfaceString += 'case COLUMN_' + col['name'].upper() + ':{\n'
                 colType = self.getObjTypeString(col['syntax'])
-                if colType == 'OctetString':
+                if colType == 'Bits':
+                    tableInterfaceString += 'u_long mask = (u_long)0xff << ((sizeof(char)-1)*8);\n'
+                    tableInterfaceString += 'int idx = 0;\n'
+                    tableInterfaceString += 'var->type =  ASN_OCTET_STR;\n'
+                    tableInterfaceString += 'rc = '+col['name']+'_get(rowreq_ctx, (u_long *)var->val.string);\n'
+                    tableInterfaceString += 'var->val_len = 0;\n'
+                    tableInterfaceString += 'while( 0 != mask) {\n'
+                    tableInterfaceString += '++idx;\n'
+                    tableInterfaceString += 'if(*((u_long*)var->val.string)&mask)\n'
+                    tableInterfaceString += 'var->val_len = idx;\n'
+                    tableInterfaceString += 'mask = mask >> 8;\n'
+                    tableInterfaceString += '}\n'
+                    tableInterfaceString += '}\n'
+                elif colType == 'OctetString':
+                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(col['syntax'])] + ';\n'
                     tableInterfaceString += 'rc = ' + col['name'] + '_get(rowreq_ctx, (char **)&var->val.string, &var->val_len);\n'
+                    tableInterfaceString += '}\n'
                 elif colType == 'ObjectIdentifier':
+                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(col['syntax'])] + ';\n'
                     tableInterfaceString += 'rc = ' + col['name'] + '_get(rowreq_ctx, (oid **)&var->val.string, &var->val_len);\n'
+                    tableInterfaceString += '}\n'
                 else:
+                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(col['syntax'])] + ';\n'
                     tableInterfaceString += 'var->val_len = sizeof(' + self.ctypeClasses[colType] + ');\n'
                     tableInterfaceString += 'rc = ' + col['name'] + '_get(rowreq_ctx, (' + self.ctypeClasses[colType] + '*)var->val.string);\n'
+                    tableInterfaceString += '}\n'
                 tableInterfaceString += 'break;\n'
             tableInterfaceString += 'default:\n'
+            tableInterfaceString += 'if('+tableName.upper()+'_MIN_COL <= column && column <= '+tableName.upper() +'_MAX_COL) {\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_mfd_'+tableName+'_get_column","assume column %d is reserved\\n",column));\n'
+            tableInterfaceString  += 'rc = MFD_SKIP;\n'
+            tableInterfaceString += '} else {\n'
+            tableInterfaceString += 'snmp_log(LOG_ERR, "unknown column %d in _'+tableName+'_get_column\\n",column);\n'
+            tableInterfaceString += '}\n' 
             tableInterfaceString += 'break;\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'return rc;\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'int _mfd_' + tableName + '_get_values(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *agtreq_info, netsnmp_request_info *requests) {\n'
-            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = (' + tableName + '_rowreq_ctx*)(netsnmp_container_table_row_extract(requests);\n'
+            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = (' + tableName + '_rowreq_ctx*)netsnmp_container_table_row_extract(requests);\n'
             tableInterfaceString += 'netsnmp_table_request_info *tri;\n'
             tableInterfaceString += 'u_char *old_string;\n'
             tableInterfaceString += 'void (*dataFreeHook)(void*);\n'
-            tableInterfaceString += 'int rc;\n'
-            tableInterfaceString += 'for(;requets;requests = requests->next) {\n'
+            tableInterfaceString += 'int rc;\n\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_mfd_'+tableName+'_get_values","called\\n"));\n\n'
+            tableInterfaceString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
+            tableInterfaceString += 'for(;requests;requests = requests->next) {\n'
             tableInterfaceString += 'old_string = requests->requestvb->val.string;\n'
             tableInterfaceString += 'dataFreeHook = requests->requestvb->dataFreeHook;\n'
             tableInterfaceString += 'if (NULL == requests->requestvb->val.string) {\n'
             tableInterfaceString += 'requests->requestvb->val.string =requests->requestvb->buf;\n'
             tableInterfaceString += 'requests->requestvb->val_len = sizeof(requests->requestvb->buf);\n'
             tableInterfaceString += '}\n'
-            tableInterfaceString += 'else if (requests->requestvb->buf == requests->requestvb->val.String) {\n'
+            tableInterfaceString += 'else if (requests->requestvb->buf == requests->requestvb->val.string) {\n'
             tableInterfaceString += 'if(requests->requestvb->val_len != sizeof(requests->requestvb->buf)){\n'
             tableInterfaceString += 'requests->requestvb->val_len = sizeof(requests->requestvb->buf);\n'
             tableInterfaceString += '}\n'
@@ -2426,14 +2547,15 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += '}\n'
             tableInterfaceString += '}\n'
             tableInterfaceString += 'else if (NULL == requests->requestvb->val.string) {\n'
+            tableInterfaceString += 'snmp_log(LOG_ERR, "NULL varbind data pointer!\\n");\n'
             tableInterfaceString += 'rc = SNMP_ERR_GENERR;\n'
             tableInterfaceString += '}\n'
             tableInterfaceString += 'if(rc) {\n'
             tableInterfaceString += 'netsnmp_request_set_error(requests, SNMP_VALIDATE_ERR(rc));\n'
-            tableInterfaceString += '}\n'
+            tableInterfaceString += '}\n\n'
             tableInterfaceString += 'if(old_string && (old_string != requests->requestvb->buf) && (requests->requestvb->val.string != old_string )) {\n'
             tableInterfaceString += 'if(dataFreeHook) {\n'
-            tableInterfaceString += '(*dataFreHook)(old_string);\n'
+            tableInterfaceString += '(*dataFreeHook)(old_string);\n'
             tableInterfaceString += '}\n'
             tableInterfaceString += 'else {\n'
             tableInterfaceString += 'free(old_string);\n'
@@ -2444,34 +2566,45 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'static void _container_free(netsnmp_container *container);\n\n'
             tableInterfaceString += 'static int _cache_load(netsnmp_cache *cache, void *vmagic) {\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_cache_load","called\\n"));\n\n'
             tableInterfaceString += 'if((NULL == cache) || (NULL == cache->magic)) {\n'
+            tableInterfaceString += 'snmp_log(LOG_ERR, "invalid cache for '+tableName+'_cache_load\\n");\n'
             tableInterfaceString += 'return -1;\n'
+            tableInterfaceString += '}\n\n'
+            tableInterfaceString += 'netsnmp_assert((0 == cache->valid) || (1 == cache->expired));\n\n'
             tableInterfaceString += 'return ' + tableName + '_container_load((netsnmp_container*)cache->magic);\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'static void _cache_free(netsnmp_cache *cache, void *magic) {\n'
             tableInterfaceString += 'netsnmp_container *container;\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_cache_free","called\\n"));\n\n'
             tableInterfaceString += 'if((NULL == cache) || (NULL == cache->magic)) {\n'
+            tableInterfaceString += 'snmp_log(LOG_ERR,"invalid cache in '+tableName+'_cache_free\\n");\n'
             tableInterfaceString += 'return;\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'container = (netsnmp_container*)cache->magic;\n'
             tableInterfaceString += '_container_free(container);\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'static void _container_item_free(' + tableName + '_rowreq_ctx *rowreq_ctx, void *context) {\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_container_item_free","called\\n"));\n\n'
             tableInterfaceString += 'if(NULL == rowreq_ctx) {\n'
             tableInterfaceString += 'return ;\n'
             tableInterfaceString += '}\n'
             tableInterfaceString += tableName + '_release_rowreq_ctx(rowreq_ctx);\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'static void _container_free(netsnmp_container *container) {\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_container_free","called\\n"));\n\n'
             tableInterfaceString += 'if(NULL == container) {\n'
+            tableInterfaceString += 'snmp_log(LOG_ERR, "invalid container in '+tableName+'_container_free\\n");\n'
             tableInterfaceString += 'return ;\n'
             tableInterfaceString += '}\n'
             tableInterfaceString += tableName + '_container_free(container);\n'
             tableInterfaceString += 'CONTAINER_CLEAR(container, (netsnmp_container_obj_func *)_container_item_free, NULL);\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'void _' + tableName + '_container_init(' + tableName + '_interface_ctx *if_ctx) {\n'
-            tableInterfaceString += 'if_ctx->cache = netsnmp_cache_create(30, _cache_load, _cache_free, ' + tableName + '_oid, ' + tableName + '_oid_size);\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_'+tableName+'_container_init","called\\n"));\n\n'
+            tableInterfaceString += 'if_ctx->cache = netsnmp_cache_create(30, _cache_load, _cache_free, ' + tableName + '_oid, ' + tableName + '_oid_size);\n\n'
             tableInterfaceString += 'if(NULL == if_ctx->cache) {\n'
+            tableInterfaceString += 'snmp_log(LOG_ERR,"error creating cache for '+tableName+'\\n");\n'
             tableInterfaceString += 'return;\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'if_ctx->cache->flags = NETSNMP_CACHE_DONT_INVALIDATE_ON_SET;\n'
@@ -2480,6 +2613,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += 'if_ctx->container = netsnmp_container_find("' + tableName + ':table_container");\n'
             tableInterfaceString += '}\n'
             tableInterfaceString += 'if(NULL == if_ctx->container) {\n'
+            tableInterfaceString += 'snmp_log(LOG_ERR,"error creating container in '+tableName+'_container_init\\n");\n'
             tableInterfaceString += 'return;\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'if(NULL != if_ctx->cache) {\n'
@@ -2487,6 +2621,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += '}\n'
             tableInterfaceString += '}\n\n'
             tableInterfaceString += 'void _' + tableName + '_container_shutdown(' + tableName + '_interface_ctx *if_ctx) {\n'
+            tableInterfaceString += 'DEBUGMSGTL(("internal:'+tableName+':_'+tableName+'_container_shutdown","called\\n"));\n\n'
             tableInterfaceString += tableName + '_container_shutdown(if_ctx->container);\n'
             tableInterfaceString += '_container_free(if_ctx->container);\n'
             tableInterfaceString += '}\n\n'
@@ -2496,12 +2631,12 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += 'netsnmp_index oid_idx;\n'
             tableInterfaceString += 'int rc;\n\n'
             tableInterfaceString += 'oid_idx.oids = oid_tmp;\n'
-            tableInterfaceString += 'oid_idx.len = sizeof(oid_tmp)/sizeof(oid);\n'
+            tableInterfaceString += 'oid_idx.len = sizeof(oid_tmp)/sizeof(oid);\n\n'
             tableInterfaceString += 'rc = ' + tableName + '_index_to_oid(&oid_idx, mib_idx);\n'
             tableInterfaceString += 'if(MFD_SUCCESS != rc) {\n'
             tableInterfaceString += 'return NULL;\n'
             tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'rowreq_ctx = (' + tableName + '_rowreq_ctx *)CONTAINER_FIND(' + tableName + '_if_ctx.container, &oid_idx);\n'
+            tableInterfaceString += 'rowreq_ctx = (' + tableName + '_rowreq_ctx *)CONTAINER_FIND(' + tableName + '_if_ctx.container, &oid_idx);\n\n'
             tableInterfaceString += 'return rowreq_ctx;\n'
             tableInterfaceString += '}\n'
             self.fileWrite(fileName=tableName + '_interface.c',data=tableInterfaceString)
@@ -2510,7 +2645,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceHeaderString += '#define ' + tableName.upper() + '_INTERFACE_H\n'
             tableInterfaceHeaderString += '#include "' + tableName + '.h"\n\n'
             tableInterfaceHeaderString += 'void _' + tableName + '_initialize_interface(' + tableName + '_registration *user_ctx, u_long flags);\n'
-            tableInterfaceHeaderString += 'void _' + tableName + '_shutdown_interfce(' + tableName + '_registration *user_ctx);\n'
+            tableInterfaceHeaderString += 'void _' + tableName + '_shutdown_interface(' + tableName + '_registration *user_ctx);\n'
             tableInterfaceHeaderString += tableName + '_registration *' + tableName + '_registration_get(void);\n'
             tableInterfaceHeaderString += tableName + '_registration *' + tableName + '_registration_set(' + tableName + '_registration *newreg);\n'
             tableInterfaceHeaderString += 'netsnmp_container *' + tableName + '_container_get(void);\n'
