@@ -87,7 +87,6 @@
 			}
 		}
 	},
-
 	"lldpStatsRemTablesLastChangeTime": {
 		"MibType": "Scalar",
 		"OvsTable": null,

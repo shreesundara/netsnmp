@@ -259,7 +259,7 @@ class MibCompiler(object):
 
                 except error.PySmiFileNotModifiedError:
                     debug.logger & debug.flagCompiler and debug.logger('will be using existing compiled MIB %s found by %s' % (mibname, searcher))
-                    #del parsedMibs[mibname]
+                    del parsedMibs[mibname]
                     processed[mibname] = statusUntouched
                     break
 
@@ -275,7 +275,7 @@ class MibCompiler(object):
 
                 if options.get('noDeps') and mibname not in mibnames:
                     debug.logger & debug.flagCompiler and debug.logger('excluding imported MIB %s from code generation' % mibname)
-                    #del parsedMibs[mibname]
+                    del parsedMibs[mibname]
                     processed[mibname] = statusUntouched
                     continue
 
