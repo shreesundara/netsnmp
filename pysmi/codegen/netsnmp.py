@@ -733,13 +733,15 @@ class NetSnmpCodeGen(AbstractCodeGen):
         return ret
 
     def getSubTypeFromSyntax(self, syntax):
-        ret = {}
         if 'SimpleSyntax' in syntax:
-            if syntax['SimpleSyntax']['objType'] in self.customTypes:
-                ret = self.customTypes[syntax['SimpleSyntax']['objType']]['subType']
+            if syntax['SimpleSyntax']['subType'] != {}:
+                return syntax['SimpleSyntax']['subType']
+            if syntax['SimpleSyntax']['objType'] in self.ctypeClasses:
+                return syntax['SimpleSyntax']['subType']
             else:
-                ret = syntax['SimpleSyntax']['subType']
-        return ret
+                return self.getSubTypeFromSyntax(self._out[syntax['SimpleSyntax']['objType']]['syntax'])
+        else:
+            return {}
 
     def getMinMaxConstraints(self, row):
         if row['syntax']['SimpleSyntax']['subType'] == {}:
@@ -839,7 +841,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 #elif 'Bits' in declaration:
                 #    self.customTypes[name] = {'baseType':'Bits'}
                 #outDict = declaration
-                self.regSym(name, outDict)
+                self.regSym(name, {'syntax':outDict})
         outStr = '//' + name + ' genTypeDeclaration'
         return outStr
 
@@ -862,17 +864,16 @@ class NetSnmpCodeGen(AbstractCodeGen):
 
     def genBits(self, data, classmode=0):
         bits = data[0]
-        namedval = ['("' + bit[0] + '", ' + str(bit[1]) + '),' for bit in bits]
+        namedval = [(bit[0], bit[1]) for bit in bits]
         numFuncCalls = len(namedval) / 255 + 1
         funcCalls = ''
-        for i in range(int(numFuncCalls)):
-            funcCalls += 'NamedValues(' + ' '.join(namedval[255 * i:255 * (i + 1)]) + ') + '
-        funcCalls = funcCalls[:-3]
-        outStr = classmode and \
-          self.indent + 'namedValues = ' + funcCalls + '\n' or \
-          '.clone(namedValues=' + funcCalls + ')'
-        outDict = {}
-        return {'Bits': outDict}
+        #for i in range(int(numFuncCalls)):
+        #    funcCalls += 'NamedValues(' + ' '.join(namedval[255 * i:255 * (i + 1)]) + ') + '
+        #funcCalls = funcCalls[:-3]
+        #outStr = classmode and \
+        #  self.indent + 'namedValues = ' + funcCalls + '\n' or \
+        #  '.clone(namedValues=' + funcCalls + ')'
+        return {'Bits': namedval}
 
     def genCompliances(self, data, classmode=0):
         complStr = ''
@@ -945,7 +946,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                         defvalBits.append((bit, bitValue))
                     else:
                         raise error.PySmiSemanticError('no such bit as "%s" for symbol "%s"' % (bit, objname))
-                return self.genBits([defvalBits])[1]
+                return defvalBits
             else:
                 raise error.PySmiSemanticError('unknown type "%s" for defval "%s" of symbol "%s"' % (defvalType, defval, objname))
         return '.clone(' + val + ')'
@@ -1116,7 +1117,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             outDict['subType'] = subtype
         if classmode:
             subtype = '%s' in subtype and subtype % objType or subtype # XXX hack?
-            outDict['subType'] = subtype
+            outDict['subType'] = {}
             return {'SimpleSyntax':outDict}
         out = [objType, subtype]
         return {'SimpleSyntax':outDict}
@@ -1299,7 +1300,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         self._importMap.clear()
         self._out.clear()
         # FIXME this is hack
-        self._out[unicode('IpAddress')] = {'SimpleSyntax':{'objType':'OctetString', 'subType':{'octetStringSubtype':{'ValueSizeConstraint':(0,4)}}}}
+        self._out[unicode('IpAddress')] = {'syntax':{'SimpleSyntax':{'objType':'OctetString', 'subType':{'octetStringSubtype':{'ValueSizeConstraint':(0,4)}}}}}
 
         self.moduleName[0], moduleOid, imports, declarations = ast
         out, importedModules = self.genImports(imports and imports or {})
@@ -1352,6 +1353,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         debug.logger & debug.flagCodegen and debug.logger('canonical MIB name %s (%s), imported MIB(s) %s, C code size %s bytes' % (self.moduleName[0], moduleOid, ','.join(importedModules) or '<none>', len(out)))
         if len(self.jsonTables) != 0:
             self.genJsonFile(self.moduleName[0].replace('-','_'),self.jsonTables)
+            self.getSubTypeFromSyntax(self._out[u'ospfPmEntRouterId']['syntax'])
             return MibInfo(oid=None, name=self.moduleName[0], imported=tuple([x for x in importedModules if x not in fakeMibs])), out
         self.genCFile(self.moduleName[0].replace('-','_'),out)
         self.genCTableFiles(self.moduleName[0].replace('-','_'))
