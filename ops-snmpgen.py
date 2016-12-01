@@ -170,7 +170,7 @@ if not mibStubs:
 
 if not mibSources:
     scriptPath = os.path.abspath(os.path.join(os.path.dirname(__file__)))
-    mibSources = ['file://' + scriptPath + '/mibs',
+    mibSources = ['file://' + scriptPath + '/../../mibs',
                    'file:///usr/share/snmp/mibs',
                    'http://mibs.snmplabs.com/asn1/@mib@']
 else:

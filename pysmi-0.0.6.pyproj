@@ -13,7 +13,7 @@
     <LaunchProvider>Standard Python launcher</LaunchProvider>
     <InterpreterId>{2af0f10d-7135-4994-9156-5d01c9c11b7e}</InterpreterId>
     <InterpreterVersion>2.7</InterpreterVersion>
-    <CommandLineArguments>--rebuild --mapping-file=ENTITY_Mapping.json ENTITY-MIB</CommandLineArguments>
+    <CommandLineArguments>--rebuild --mapping-file=OSPF_Mapping.json OSPF-MIB</CommandLineArguments>
     <EnableNativeCodeDebugging>False</EnableNativeCodeDebugging>
     <IsWindowsApplication>False</IsWindowsApplication>
   </PropertyGroup>

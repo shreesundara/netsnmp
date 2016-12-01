@@ -772,7 +772,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
         outDict['name'] = name
         outDict['syntax'] = syntax
         outDict['UNITS'] = units
-        outDict['MaxAccessPart'] = maxaccess
+        outDict['maxaccess'] = maxaccess
         outDict['DESCRIPTION'] = description
         outDict['augmention'] = augmention
         outDict['INDEX'] = index
@@ -868,7 +868,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
         numFuncCalls = len(namedval) / 255 + 1
         funcCalls = ''
         #for i in range(int(numFuncCalls)):
-        #    funcCalls += 'NamedValues(' + ' '.join(namedval[255 * i:255 * (i + 1)]) + ') + '
+        #    funcCalls += 'NamedValues(' + ' '.join(namedval[255 * i:255 * (i +
+        #    1)]) + ') + '
         #funcCalls = funcCalls[:-3]
         #outStr = classmode and \
         #  self.indent + 'namedValues = ' + funcCalls + '\n' or \
@@ -1020,7 +1021,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
 
     def genMaxAccess(self, data, classmode=0):
         access = data[0].replace('-', '')
-        return access != 'notaccessible' and '.setMaxAccess("' + access + '")' or ''
+        #return access != 'notaccessible' and '.setMaxAccess("' + access + '")' or ''
+        return access
 
     def genOctetStringSubType(self, data, classmode=0):
         outDict = {}
@@ -1353,7 +1355,6 @@ class NetSnmpCodeGen(AbstractCodeGen):
         debug.logger & debug.flagCodegen and debug.logger('canonical MIB name %s (%s), imported MIB(s) %s, C code size %s bytes' % (self.moduleName[0], moduleOid, ','.join(importedModules) or '<none>', len(out)))
         if len(self.jsonTables) != 0:
             self.genJsonFile(self.moduleName[0].replace('-','_'),self.jsonTables)
-            self.getSubTypeFromSyntax(self._out[u'ospfPmEntRouterId']['syntax'])
             return MibInfo(oid=None, name=self.moduleName[0], imported=tuple([x for x in importedModules if x not in fakeMibs])), out
         self.genCFile(self.moduleName[0].replace('-','_'),out)
         self.genCTableFiles(self.moduleName[0].replace('-','_'))
@@ -1953,10 +1954,10 @@ class NetSnmpCodeGen(AbstractCodeGen):
             self.fileWrite(fileName=tableName + '_oids.h',data=tableOidsHeaderString)
 
             tableDataGetString = """#include <net-snmp/net-snmp-config.h>
-    #include <net-snmp/net-snmp-features.h>
-    #include <net-snmp/net-snmp-includes.h>
-    #include <net-snmp/agent/net-snmp-agent-includes.h>
-    """
+#include <net-snmp/net-snmp-features.h>
+#include <net-snmp/net-snmp-includes.h>
+#include <net-snmp/agent/net-snmp-agent-includes.h>
+"""
             tableDataGetString += '#include "' + tableName + '.h"\n\n'
             tableDataGetString += 'int ' + tableName + '_indexes_set_tbl_idx(' + tableName + '_mib_index *tbl_idx'
             for idx in indexes:
@@ -2017,8 +2018,40 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableDataGetString += '}\n'
             tableDataGetString += 'return MFD_SUCCESS;\n'
             tableDataGetString += '}\n\n'
+            for idx in indexes:
+                if idx['maxaccess'] == 'notaccessible':
+                    continue
+                tableDataGetString += 'int ' + idx['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, '
+                idxType = self.getObjTypeString(idx)
+                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                    if idxType == 'OctetString':
+                        tableDataGetString += 'char **'
+                    else:
+                        tableDataGetString += 'oid **'
+                    tableDataGetString += idx['name'] + '_val_ptr_ptr, size_t *' + idx['name'] + '_val_ptr_len_ptr) {\n'
+                    tableDataGetString += 'netsnmp_assert( (NULL != ' + idx['name'] + '_val_ptr_ptr) && (NULL != *' + idx['name'] + '_val_ptr_ptr));\n'
+                    tableDataGetString += 'netsnmp_assert(NULL != ' + idx['name'] + '_val_ptr_len_ptr);\n'
+                else:
+                    tableDataGetString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr) {\n'
+                    tableDataGetString += 'netsnmp_assert(NULL != ' + idx['name'] + '_val_ptr);\n'
+                tableDataGetString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + idx['name'] + '_get","called\\n"));\n'
+                tableDataGetString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
+                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                    tableDataGetString += 'if ((NULL == (*' + idx['name'] + '_val_ptr_ptr)) || ((*' + idx['name'] + '_val_ptr_len_ptr) < (rowreq_ctx->tbl_idx.' + idx['name'] + '_len* sizeof(rowreq_ctx->tbl_idx.' + idx['name'] + '[0])))) {\n'
+                    tableDataGetString += '(* ' + idx['name'] + '_val_ptr_ptr) = malloc(rowreq_ctx->tbl_idx.' + idx['name'] + '_len* sizeof(rowreq_ctx->tbl_idx.' + idx['name'] + '[0]));\n'
+                    tableDataGetString += 'if (NULL == (*' + idx['name'] + '_val_ptr_ptr)) {\n'
+                    tableDataGetString += 'snmp_log(LOG_ERR, "could not allocate memory (rowreq_ctx->tbl_idx.' + idx['name'] + ')\\n");\n'
+                    tableDataGetString += 'return MFD_ERROR;\n'
+                    tableDataGetString += '}\n'
+                    tableDataGetString += '}\n'
+                    tableDataGetString += '(* ' + idx['name'] + '_val_ptr_len_ptr) = rowreq_ctx->tbl_idx.' + idx['name'] + '_len* sizeof(rowreq_ctx->tbl_idx.' + idx['name'] + '[0]);\n'
+                    tableDataGetString += 'memcpy((*' + idx['name'] + '_val_ptr_ptr), rowreq_ctx->tbl_idx.' + idx['name'] + ', rowreq_ctx->tbl_idx.' + idx['name'] + '_len* sizeof(rowreq_ctx->tbl_idx.' + idx['name'] + '[0]));\n'
+                else:
+                    tableDataGetString += '(*' + idx['name'] + '_val_ptr) = rowreq_ctx->tbl_idx.' + idx['name'] + ';\n'
+                tableDataGetString += 'return MFD_SUCCESS;\n'
+                tableDataGetString += '}\n\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in [idx['name'] for idx in indexes]:
+                if col['name'] in [idx['name'] for idx in indexes] or col['maxaccess'] == 'notaccessible':
                     continue
                 tableDataGetString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, '
                 colType = self.getObjTypeString(col)
@@ -2052,9 +2085,19 @@ class NetSnmpCodeGen(AbstractCodeGen):
             self.fileWrite(fileName=tableName + '_data_get.c',data=tableDataGetString)
 
             tableDataGetHeaderString = '#ifndef ' + tableName.upper() + '_DATA_GET_H\n'
-            tableDataGetHeaderString += '#define ' + tableName.upper() + '_DATA_GET_H\n'
+            tableDataGetHeaderString += '#define ' + tableName.upper() + '_DATA_GET_H\n\n'
+            for idx in indexes:
+                if idx['maxaccess'] == 'notaccessible':
+                    continue
+                idxType = self.getObjTypeString(idx)
+                if idxType == 'OctetString':
+                    tableDataGetHeaderString += 'int ' + idx['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, char **' + idx['name'] + '_val_ptr_ptr, size_t *' + idx['name'] + '_val_ptr_len_ptr);\n\n'
+                elif idxType == 'ObjectIdentifier':
+                    tableDataGetHeaderString += 'int ' + idx['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, oid **' + idx['name'] + '_val_ptr_ptr, size_t *' + idx['name'] + '_val_ptr_len_ptr);\n\n'
+                else:
+                    tableDataGetHeaderString += 'int ' + idx['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx,' + self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in [idx['name'] for idx in indexes]:
+                if col['name'] in [idx['name'] for idx in indexes] or col['maxaccess'] == 'notaccessible':
                     continue
                 colType = self.getObjTypeString(col)
                 if colType == 'OctetString':
@@ -2227,11 +2270,27 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idxTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
                             self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row, char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n\n'
                         else:
-                            tableOvsdbGetString += 'char *temp = (char*)'
+                            tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbIdx['Type']['Key']:
-                                tableOvsdbGetString += 'smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                                if type(dbIdx['Type']['Key']) == dict:
+                                    keyType = dbIdx['Type']['Key']['Type']
+                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
                             else:
-                                tableOvsdbGetString += idxTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                                tableOvsdbGetString += 'temp = (char*)'+idxTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
                             tableOvsdbGetString += '*' + idx['name'] + '_val_ptr_len = temp != NULL ? strlen(temp) : 0;\n'
                             tableOvsdbGetString += 'memcpy(' + idx['name'] + '_val_ptr' + ', temp, *' + idx['name'] + '_val_ptr_len);\n'
                     elif idxType == 'ObjectIdentifier':
@@ -2240,11 +2299,27 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idxTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
                             self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row, oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n\n'
                         else:
-                            tableOvsdbGetString += 'char *temp = (char *)'
+                            tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbIdx['Type']['Key']:
-                                tableOvsdbGetString += 'smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                                if type(dbIdx['Type']['Key']) == dict:
+                                    keyType = dbIdx['Type']['Key']['Type']
+                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
                             else:
-                                tableOvsdbGetString += idxTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                                tableOvsdbGetString += 'temp = (char*)'+idxTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
                             tableOvsdbGetString += 'oid temp_oid[MAX_OID_LEN] = {0};\n'
                             tableOvsdbGetString += '*' + idx['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
                             tableOvsdbGetString += 'if (temp != NULL) {\n'
@@ -2258,14 +2333,30 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row, ' + self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n\n'
                         else:
                             if dbIdx['Type']['Key']:
-                                tableOvsdbGetString += 'char *temp = (char*)'
-                                tableOvsdbGetString += 'smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
-                                tableOvsdbGetString += 'if(temp == NULL) {\n'
-                                tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = 0;\n'
-                                tableOvsdbGetString += '}\n'
-                                tableOvsdbGetString += 'else {\n'
-                                tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[scalarType] + ')atoi(temp);\n'
-                                tableOvsdbGetString += '}\n'
+                                if type(dbIdx['Type']['Key']) == dict:
+                                    keyType = dbIdx['Type']['Key']['Type']
+                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += '*'+idx['name']+'_val_ptr = ('+self.ctypeClasses[idxType]+')'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += '*'+idx['name']+'_val_ptr = ('+self.ctypeClasses[idxType]+')'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'char *temp = (char*)'
+                                    tableOvsdbGetString += 'smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                                    tableOvsdbGetString += 'if(temp == NULL) {\n'
+                                    tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = 0;\n'
+                                    tableOvsdbGetString += '}\n'
+                                    tableOvsdbGetString += 'else {\n'
+                                    tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[idxType] + ')atoi(temp);\n'
+                                    tableOvsdbGetString += '}\n'
                             else:
                                 tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[idxType] + ')*('
                                 tableOvsdbGetString += idxTable + '_row->' + dbIdx['OvsColumn'] + ');\n'
@@ -2279,11 +2370,27 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
                             self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n\n'
                         else:
-                            tableOvsdbGetString += 'char *temp = (char*)'
+                            tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbIdx['Type']['Key']:
-                                tableOvsdbGetString += 'smap_get(&' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                                if type(dbIdx['Type']['Key']) == dict:
+                                    keyType = dbIdx['Type']['Key']['Type']
+                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
                             else:
-                                tableOvsdbGetString += rootDbTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                                tableOvsdbGetString += 'temp = (char*)' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
                             tableOvsdbGetString += '*' + idx['name'] + '_val_ptr_len = temp != NULL ? strlen(temp) : 0;\n'
                             tableOvsdbGetString += 'memcpy(' + idx['name'] + '_val_ptr' + ', temp, *' + idx['name'] + '_val_ptr_len);\n'
                     elif idxType == 'ObjectIdentifier':
@@ -2292,11 +2399,27 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
                             self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n\n'
                         else:
-                            tableOvsdbGetString += 'char *temp = (char*)'
+                            tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbIdx['Type']['Key']:
-                                tableOvsdbGetString += 'smap_get(&' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                                if type(dbIdx['Type']['Key']) == dict:
+                                    keyType = dbIdx['Type']['Key']['Type']
+                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
                             else:
-                                tableOvsdbGetString += rootDbTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
+                                tableOvsdbGetString += 'temp = (char*)' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
                             tableOvsdbGetString += 'oid temp_oid[MAX_OID_LEN] = {0};\n'
                             tableOvsdbGetString += '*' + idx['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
                             tableOvsdbGetString += 'if (temp != NULL) {\n'
@@ -2310,14 +2433,30 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, ' + self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n\n'
                         else:
                             if dbIdx['Type']['Key']:
-                                tableOvsdbGetString += 'char *temp = (char*)'
-                                tableOvsdbGetString += 'smap_get(&' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
-                                tableOvsdbGetString += 'if(temp == NULL) {\n'
-                                tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = 0;\n'
-                                tableOvsdbGetString += '}\n'
-                                tableOvsdbGetString += 'else {\n'
-                                tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[scalarType] + ')atoi(temp);\n'
-                                tableOvsdbGetString += '}\n'
+                                if type(dbIdx['Type']['Key']) == dict:
+                                    keyType = dbIdx['Type']['Key']['Type']
+                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += '*'+idx['name']+'_val_ptr = ('+self.ctypeClasses[idxType]+')'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += '*'+idx['name']+'_val_ptr = ('+self.ctypeClasses[idxType]+')'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'char *temp = (char*)'
+                                    tableOvsdbGetString += 'smap_get(&' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
+                                    tableOvsdbGetString += 'if(temp == NULL) {\n'
+                                    tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = 0;\n'
+                                    tableOvsdbGetString += '}\n'
+                                    tableOvsdbGetString += 'else {\n'
+                                    tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[idxType] + ')atoi(temp);\n'
+                                    tableOvsdbGetString += '}\n'
                             else:
                                 tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[idxType] + ')*('
                                 tableOvsdbGetString += rootDbTable + '_row->' + dbIdx['OvsColumn'] + ');\n'
@@ -2366,11 +2505,27 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + colTable + '_row, ' + col['name'] + '_val_ptr, ' + col['name'] + '_val_ptr_len);\n'
                             self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row, char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n\n'
                         else:
-                            tableOvsdbGetString += 'char *temp = (char*)'
+                            tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbCol['Type']['Key']:
-                                tableOvsdbGetString += 'smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                                if type(dbCol['Type']['Key']) == dict:
+                                    keyType = dbCol['Type']['Key']['Type']
+                                    keyValue = dbCol['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
                             else:
-                                tableOvsdbGetString += colTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                                tableOvsdbGetString += 'temp = (char*)'+colTable + '_row->' + dbCol['OvsColumn'] + ';\n'
                             tableOvsdbGetString += '*' + col['name'] + '_val_ptr_len = temp != NULL ? strlen(temp) : 0;\n'
                             tableOvsdbGetString += 'memcpy(' + col['name'] + '_val_ptr' + ', temp, *' + col['name'] + '_val_ptr_len);\n'
                     elif colType == 'ObjectIdentifier':
@@ -2379,11 +2534,27 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + colTable + '_row, ' + col['name'] + '_val_ptr, ' + col['name'] + '_val_ptr_len);\n'
                             self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row, oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n\n'
                         else:
-                            tableOvsdbGetString += 'char *temp = (char*)'
+                            tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbCol['Type']['Key']:
-                                tableOvsdbGetString += 'smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                                if type(dbCol['Type']['Key']) == dict:
+                                    keyType = dbCol['Type']['Key']['Type']
+                                    keyValue = dbCol['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
                             else:
-                                tableOvsdbGetString += colTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                                tableOvsdbGetString += 'temp = (char*)'+colTable + '_row->' + dbCol['OvsColumn'] + ';\n'
                             tableOvsdbGetString += 'oid temp_oid[MAX_OID_LEN] = {0};\n'
                             tableOvsdbGetString += '*' + col['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
                             tableOvsdbGetString += 'if (temp != NULL) {\n'
@@ -2397,14 +2568,30 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row, ' + self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n\n'
                         else:
                             if dbCol['Type']['Key']:
-                                tableOvsdbGetString += 'char *temp = (char*)'
-                                tableOvsdbGetString += 'smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
-                                tableOvsdbGetString += 'if(temp == NULL) {\n'
-                                tableOvsdbGetString += '*' + col['name'] + '_val_ptr = 0;\n'
-                                tableOvsdbGetString += '}\n'
-                                tableOvsdbGetString += 'else {\n'
-                                tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')atoi(temp);\n'
-                                tableOvsdbGetString += '}\n'
+                                if type(dbCol['Type']['Key']) == dict:
+                                    keyType = dbCol['Type']['Key']['Type']
+                                    keyValue = dbCol['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'char *temp = (char*)'
+                                    tableOvsdbGetString += 'smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                                    tableOvsdbGetString += 'if(temp == NULL) {\n'
+                                    tableOvsdbGetString += '*' + col['name'] + '_val_ptr = 0;\n'
+                                    tableOvsdbGetString += '}\n'
+                                    tableOvsdbGetString += 'else {\n'
+                                    tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')atoi(temp);\n'
+                                    tableOvsdbGetString += '}\n'
                             else:
                                 tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')*('
                                 tableOvsdbGetString += colTable + '_row->' + dbCol['OvsColumn'] + ');\n'
@@ -2418,11 +2605,27 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + col['name'] + '_val_ptr, ' + col['name'] + '_val_ptr_len);\n'
                             self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n\n'
                         else:
-                            tableOvsdbGetString += 'char *temp = (char*)'
+                            tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbCol['Type']['Key']:
-                                tableOvsdbGetString += 'smap_get(&' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                                if type(dbCol['Type']['Key']) == dict:
+                                    keyType = dbCol['Type']['Key']['Type']
+                                    keyValue = dbCol['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
                             else:
-                                tableOvsdbGetString += rootDbTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                                tableOvsdbGetString += 'temp = (char*)'+rootDbTable + '_row->' + dbCol['OvsColumn'] + ';\n'
                             tableOvsdbGetString += '*' + col['name'] + '_val_ptr_len = temp != NULL ? strlen(temp) : 0;\n'
                             tableOvsdbGetString += 'memcpy(' + col['name'] + '_val_ptr' + ', temp, *' + col['name'] + '_val_ptr_len);\n'
                     elif colType == 'ObjectIdentifier':
@@ -2431,11 +2634,27 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + col['name'] + '_val_ptr, ' + col['name'] + '_val_ptr_len);\n'
                             self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n\n'
                         else:
-                            tableOvsdbGetString += 'char *temp = (char*)'
+                            tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbCol['Type']['Key']:
-                                tableOvsdbGetString += 'smap_get(&' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                                if type(dbCol['Type']['Key']) == dict:
+                                    keyType = dbCol['Type']['Key']['Type']
+                                    keyValue = dbCol['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
                             else:
-                                tableOvsdbGetString += rootDbTable + '_row->' + dbCol['OvsColumn'] + ';\n'
+                                tableOvsdbGetString += 'temp = (char*)' +rootDbTable + '_row->' + dbCol['OvsColumn'] + ';\n'
                             tableOvsdbGetString += 'oid temp_oid[MAX_OID_LEN] = {0};\n'
                             tableOvsdbGetString += '*' + col['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
                             tableOvsdbGetString += 'if (temp != NULL) {\n'
@@ -2449,14 +2668,30 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, ' + self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n\n'
                         else:
                             if dbCol['Type']['Key']:
-                                tableOvsdbGetString += 'char *temp = (char*)'
-                                tableOvsdbGetString += 'smap_get(&' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
-                                tableOvsdbGetString += 'if(temp == NULL) {\n'
-                                tableOvsdbGetString += '*' + col['name'] + '_val_ptr = 0;\n'
-                                tableOvsdbGetString += '}\n'
-                                tableOvsdbGetString += 'else {\n'
-                                tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')atoi(temp);\n'
-                                tableOvsdbGetString += '}\n'
+                                if type(dbCol['Type']['Key']) == dict:
+                                    keyType = dbCol['Type']['Key']['Type']
+                                    keyValue = dbCol['Type']['Key']['Value']
+                                    if keyType == 'str':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
+                                        tableOvsdbGetString += '*'+col['name'] +'_val_ptr = ('+self.ctypeClasses[colType]+')'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                    elif keyType == 'int':
+                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
+                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
+                                        tableOvsdbGetString += '*'+col['name'] +'_val_ptr = ('+self.ctypeClasses[colType]+')'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
+                                        tableOvsdbGetString += '}\n'
+                                        tableOvsdbGetString += '}\n'
+                                else:
+                                    tableOvsdbGetString += 'char *temp = (char*)'
+                                    tableOvsdbGetString += 'smap_get(&' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
+                                    tableOvsdbGetString += 'if(temp == NULL) {\n'
+                                    tableOvsdbGetString += '*' + col['name'] + '_val_ptr = 0;\n'
+                                    tableOvsdbGetString += '}\n'
+                                    tableOvsdbGetString += 'else {\n'
+                                    tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')atoi(temp);\n'
+                                    tableOvsdbGetString += '}\n'
                             else:
                                 tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')*('
                                 tableOvsdbGetString += rootDbTable + '_row->' + dbCol['OvsColumn'] + ');\n'
@@ -2811,8 +3046,40 @@ class NetSnmpCodeGen(AbstractCodeGen):
             tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_mfd_' + tableName + '_get_column","called for %d\\n",column));\n\n'
             tableInterfaceString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
             tableInterfaceString += 'switch(column) {\n'
+            for idx in indexes:
+                if idx['maxaccess'] == 'notaccessible':
+                    continue
+                tableInterfaceString += 'case COLUMN_' + idx['name'].upper() + ':{\n'
+                idxType = self.getObjTypeString(idx)
+                if idxType == 'Bits':
+                    tableInterfaceString += 'u_long mask = (u_long)0xff << ((sizeof(char)-1)*8);\n'
+                    tableInterfaceString += 'int idx = 0;\n'
+                    tableInterfaceString += 'var->type =  ASN_OCTET_STR;\n'
+                    tableInterfaceString += 'rc = ' + idx['name'] + '_get(rowreq_ctx, (u_long *)var->val.string);\n'
+                    tableInterfaceString += 'var->val_len = 0;\n'
+                    tableInterfaceString += 'while( 0 != mask) {\n'
+                    tableInterfaceString += '++idx;\n'
+                    tableInterfaceString += 'if(*((u_long*)var->val.string)&mask)\n'
+                    tableInterfaceString += 'var->val_len = idx;\n'
+                    tableInterfaceString += 'mask = mask >> 8;\n'
+                    tableInterfaceString += '}\n'
+                    tableInterfaceString += '}\n'
+                elif idxType == 'OctetString':
+                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(idx)] + ';\n'
+                    tableInterfaceString += 'rc = ' + idx['name'] + '_get(rowreq_ctx, (char **)&var->val.string, &var->val_len);\n'
+                    tableInterfaceString += '}\n'
+                elif idxType == 'ObjectIdentifier':
+                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(idx)] + ';\n'
+                    tableInterfaceString += 'rc = ' + idx['name'] + '_get(rowreq_ctx, (oid **)&var->val.string, &var->val_len);\n'
+                    tableInterfaceString += '}\n'
+                else:
+                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(idx)] + ';\n'
+                    tableInterfaceString += 'var->val_len = sizeof(' + self.ctypeClasses[idxType] + ');\n'
+                    tableInterfaceString += 'rc = ' + idx['name'] + '_get(rowreq_ctx, (' + self.ctypeClasses[idxType] + '*)var->val.string);\n'
+                    tableInterfaceString += '}\n'
+                tableInterfaceString += 'break;\n'
             for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in self.tableRows[self.tables[tableName]['row']]['index']:
+                if col['name'] in self.tableRows[self.tables[tableName]['row']]['index'] or col['maxaccess'] == 'notaccessible':
                     continue
                 tableInterfaceString += 'case COLUMN_' + col['name'].upper() + ':{\n'
                 colType = self.getObjTypeString(col)
@@ -3133,7 +3400,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             notificationFileString += 'goto loop_cleanup;\n'
             notificationFileString += '}\n\n'
             for obj in trapSym['objects']:
-                objSym = self.notificationTypes[self.getObjTypeString({'SimpleSyntax':{'objType':self.symbolTable[obj.items()[0][0]][obj.items()[0][1]]['syntax'][0][0]}})]
+                objSym = self.notificationTypes[self.getObjTypeString(self._out[obj.items()[0][1]])]
                 notificationFileString += 'status = snmp_add_var(pdu, objid_' + obj.items()[0][1] + ', sizeof(objid_' + obj.items()[0][1] + ')/sizeof(oid), \'' + objSym + '\', ' + obj.items()[0][1] + '_value);\n'
                 notificationFileString += 'if (status != 0) {\n'
                 notificationFileString += 'VLOG_ERR("Failed to add var ' + obj.items()[0][1] + ' to pdu %d",status);\n'
