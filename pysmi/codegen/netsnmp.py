@@ -1554,7 +1554,23 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 else:
                     scalarOvsdbGetString += 'char *temp = (char*)'
                     if scalarJson['Type']['Key']:
-                        scalarOvsdbGetString += 'smap_get(&' + scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ', "' + scalarJson['Type']['Key'] + '");\n'
+                        if type(scalarJson['Type']['Key']) == dict:
+                            keyType = scalarJson['Type']['Key']['KeyType']
+                            keyValue = scalarJson['Type']['Key']['KeyValue']
+                            if keyType == 'str':
+                                scalarOvsdbGetString += 'for (int i = 0; i < ' + scalarJson['OvsTable']+'_row->n_'+scalarJson['OvsColumn']+'; i++) {\n'
+                                scalarOvsdbGetString += 'if(strcmp("'+keyValue+'", '+scalarJson['OvsTable']+'_row->key_'+scalarJson['OvsColumn']+'[i]) == 0) {\n'
+                                scalarOvsdbGetString += '*'+scalar['name']+'_val_ptr = ('+self.ctypeClasses[scalarType]+')'+scalarJson['OvsTable']+'_row->value_'+scalarJson['OvsColumn']+'[i];\n'
+                                scalarOvsdbGetString += '}\n'
+                                scalarOvsdbGetString += '}\n'
+                            elif keyType == 'int':
+                                scalarOvsdbGetString += 'for (int i = 0; i < ' + scalarJson['OvsTable']+'_row->n_'+scalarJson['OvsColumn']+'; i++) {\n'
+                                scalarOvsdbGetString += 'if('+keyValue+' == '+scalarJson['OvsTable']+'_row->key_'+scalarJson['OvsColumn']+'[i]) {\n'
+                                scalarOvsdbGetString += '*'+scalar['name']+'_val_ptr = ('+self.ctypeClasses[scalarType]+')'+scalarJson['OvsTable']+'_row->value_'+scalarJson['OvsColumn']+'[i];\n'
+                                scalarOvsdbGetString += '}\n'
+                                scalarOvsdbGetString += '}\n'
+                        else:
+                            scalarOvsdbGetString += 'smap_get(&' + scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ', "' + scalarJson['Type']['Key'] + '");\n'
                     else:
                         scalarOvsdbGetString += scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ';\n'
                     scalarOvsdbGetString += '*' + scalar['name'] + '_val_ptr_len = temp != NULL ? strlen(temp) : 0;\n'
@@ -1567,11 +1583,27 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 else:
                     scalarOvsdbGetString += 'char *temp = (char *)'
                     if scalarJson['Type']['Key']:
-                        scalarOvsdbGetString += 'smap_get(&' + scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ', "' + scalarJson['Type']['Key'] + '");\n'
-                        scalarOvsdbGetString += 'oid temp_oid[MAX_OID_LEN] = {0};\n'
-                        scalarOvsdbGetString += 'if (temp != NULL) {\n'
-                        scalarOvsdbGetString += 'snmp_parse_oid(temp, temp_oid, ' + scalar['name'] + '_val_ptr_len);\n'
-                        scalarOvsdbGetString += '}\n'
+                        if type(scalarJson['Type']['Key']) == dict:
+                            keyType = scalarJson['Type']['Key']['KeyType']
+                            keyValue = scalarJson['Type']['Key']['KeyValue']
+                            if keyType == 'str':
+                                scalarOvsdbGetString += 'for (int i = 0; i < ' + scalarJson['OvsTable']+'_row->n_'+scalarJson['OvsColumn']+'; i++) {\n'
+                                scalarOvsdbGetString += 'if(strcmp("'+keyValue+'", '+scalarJson['OvsTable']+'_row->key_'+scalarJson['OvsColumn']+'[i]) == 0) {\n'
+                                scalarOvsdbGetString += '*'+scalar['name']+'_val_ptr = ('+self.ctypeClasses[scalarType]+')'+scalarJson['OvsTable']+'_row->value_'+scalarJson['OvsColumn']+'[i];\n'
+                                scalarOvsdbGetString += '}\n'
+                                scalarOvsdbGetString += '}\n'
+                            elif keyType == 'int':
+                                scalarOvsdbGetString += 'for (int i = 0; i < ' + scalarJson['OvsTable']+'_row->n_'+scalarJson['OvsColumn']+'; i++) {\n'
+                                scalarOvsdbGetString += 'if('+keyValue+' == '+scalarJson['OvsTable']+'_row->key_'+scalarJson['OvsColumn']+'[i]) {\n'
+                                scalarOvsdbGetString += '*'+scalar['name']+'_val_ptr = ('+self.ctypeClasses[scalarType]+')'+scalarJson['OvsTable']+'_row->value_'+scalarJson['OvsColumn']+'[i];\n'
+                                scalarOvsdbGetString += '}\n'
+                                scalarOvsdbGetString += '}\n'
+                        else:
+                            scalarOvsdbGetString += 'smap_get(&' + scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ', "' + scalarJson['Type']['Key'] + '");\n'
+                            scalarOvsdbGetString += 'oid temp_oid[MAX_OID_LEN] = {0};\n'
+                            scalarOvsdbGetString += 'if (temp != NULL) {\n'
+                            scalarOvsdbGetString += 'snmp_parse_oid(temp, temp_oid, ' + scalar['name'] + '_val_ptr_len);\n'
+                            scalarOvsdbGetString += '}\n'
                     else:
                         scalarOvsdbGetString += scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ';\n'
                         scalarOvsdbGetString += 'oid temp_oid[MAX_OID_LEN] = {0};\n'
@@ -1586,14 +1618,30 @@ class NetSnmpCodeGen(AbstractCodeGen):
                     self.customFileHeaderString += 'void ' + scalarJson['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + scalarJson['OvsTable'] + ' *' + scalarJson['OvsTable'] + '_row, ' + self.ctypeClasses[scalarType] + ' *' + scalar['name'] + '_val_ptr);\n'
                 else:
                     if scalarJson['Type']['Key']:
-                        scalarOvsdbGetString += 'char *temp = (char*)'
-                        scalarOvsdbGetString += 'smap_get(&' + scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ', "' + scalarJson['Type']['Key'] + '");\n'
-                        scalarOvsdbGetString += 'if(temp == NULL) {\n'
-                        scalarOvsdbGetString += '*' + scalar['name'] + '_val_ptr = 0;\n'
-                        scalarOvsdbGetString += '}\n'
-                        scalarOvsdbGetString += 'else {\n'
-                        scalarOvsdbGetString += '*' + scalar['name'] + '_val_ptr = (' + self.ctypeClasses[scalarType] + ')atoi(temp);\n'
-                        scalarOvsdbGetString += '}\n'
+                        if type(scalarJson['Type']['Key']) == dict:
+                            keyType = scalarJson['Type']['Key']['KeyType']
+                            keyValue = scalarJson['Type']['Key']['KeyValue']
+                            if keyType == 'str':
+                                scalarOvsdbGetString += 'for (int i = 0; i < ' + scalarJson['OvsTable']+'_row->n_'+scalarJson['OvsColumn']+'; i++) {\n'
+                                scalarOvsdbGetString += 'if(strcmp("'+keyValue+'", '+scalarJson['OvsTable']+'_row->key_'+scalarJson['OvsColumn']+'[i]) == 0) {\n'
+                                scalarOvsdbGetString += '*'+scalar['name']+'_val_ptr = ('+self.ctypeClasses[scalarType]+')'+scalarJson['OvsTable']+'_row->value_'+scalarJson['OvsColumn']+'[i];\n'
+                                scalarOvsdbGetString += '}\n'
+                                scalarOvsdbGetString += '}\n'
+                            elif keyType == 'int':
+                                scalarOvsdbGetString += 'for (int i = 0; i < ' + scalarJson['OvsTable']+'_row->n_'+scalarJson['OvsColumn']+'; i++) {\n'
+                                scalarOvsdbGetString += 'if('+keyValue+' == '+scalarJson['OvsTable']+'_row->key_'+scalarJson['OvsColumn']+'[i]) {\n'
+                                scalarOvsdbGetString += '*'+scalar['name']+'_val_ptr = ('+self.ctypeClasses[scalarType]+')'+scalarJson['OvsTable']+'_row->value_'+scalarJson['OvsColumn']+'[i];\n'
+                                scalarOvsdbGetString += '}\n'
+                                scalarOvsdbGetString += '}\n'
+                        else:
+                            scalarOvsdbGetString += 'char *temp = (char*)'
+                            scalarOvsdbGetString += 'smap_get(&' + scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ', "' + scalarJson['Type']['Key'] + '");\n'
+                            scalarOvsdbGetString += 'if(temp == NULL) {\n'
+                            scalarOvsdbGetString += '*' + scalar['name'] + '_val_ptr = 0;\n'
+                            scalarOvsdbGetString += '}\n'
+                            scalarOvsdbGetString += 'else {\n'
+                            scalarOvsdbGetString += '*' + scalar['name'] + '_val_ptr = (' + self.ctypeClasses[scalarType] + ')atoi(temp);\n'
+                            scalarOvsdbGetString += '}\n'
                     else:
                         scalarOvsdbGetString += '*' + scalar['name'] + '_val_ptr = (' + self.ctypeClasses[scalarType] + ')*('
                         scalarOvsdbGetString += scalarJson['OvsTable'] + '_row->' + scalarJson['OvsColumn'] + ');\n'
@@ -2273,8 +2321,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbIdx['Type']['Key']:
                                 if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['Type']
-                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    keyType = dbIdx['Type']['Key']['KeyType']
+                                    keyValue = dbIdx['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
@@ -2302,8 +2350,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbIdx['Type']['Key']:
                                 if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['Type']
-                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    keyType = dbIdx['Type']['Key']['KeyType']
+                                    keyValue = dbIdx['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
@@ -2334,8 +2382,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                         else:
                             if dbIdx['Type']['Key']:
                                 if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['Type']
-                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    keyType = dbIdx['Type']['Key']['KeyType']
+                                    keyValue = dbIdx['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
@@ -2373,8 +2421,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbIdx['Type']['Key']:
                                 if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['Type']
-                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    keyType = dbIdx['Type']['Key']['KeyType']
+                                    keyValue = dbIdx['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
@@ -2402,8 +2450,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbIdx['Type']['Key']:
                                 if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['Type']
-                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    keyType = dbIdx['Type']['Key']['KeyType']
+                                    keyValue = dbIdx['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
@@ -2434,8 +2482,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                         else:
                             if dbIdx['Type']['Key']:
                                 if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['Type']
-                                    keyValue = dbIdx['Type']['Key']['Value']
+                                    keyType = dbIdx['Type']['Key']['KeyType']
+                                    keyValue = dbIdx['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
@@ -2508,8 +2556,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbCol['Type']['Key']:
                                 if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['Type']
-                                    keyValue = dbCol['Type']['Key']['Value']
+                                    keyType = dbCol['Type']['Key']['KeyType']
+                                    keyValue = dbCol['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
@@ -2537,8 +2585,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbCol['Type']['Key']:
                                 if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['Type']
-                                    keyValue = dbCol['Type']['Key']['Value']
+                                    keyType = dbCol['Type']['Key']['KeyType']
+                                    keyValue = dbCol['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
@@ -2569,8 +2617,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                         else:
                             if dbCol['Type']['Key']:
                                 if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['Type']
-                                    keyValue = dbCol['Type']['Key']['Value']
+                                    keyType = dbCol['Type']['Key']['KeyType']
+                                    keyValue = dbCol['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
@@ -2608,8 +2656,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbCol['Type']['Key']:
                                 if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['Type']
-                                    keyValue = dbCol['Type']['Key']['Value']
+                                    keyType = dbCol['Type']['Key']['KeyType']
+                                    keyValue = dbCol['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
@@ -2637,8 +2685,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                             tableOvsdbGetString += 'char *temp = NULL;\n'
                             if dbCol['Type']['Key']:
                                 if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['Type']
-                                    keyValue = dbCol['Type']['Key']['Value']
+                                    keyType = dbCol['Type']['Key']['KeyType']
+                                    keyValue = dbCol['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
@@ -2669,8 +2717,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
                         else:
                             if dbCol['Type']['Key']:
                                 if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['Type']
-                                    keyValue = dbCol['Type']['Key']['Value']
+                                    keyType = dbCol['Type']['Key']['KeyType']
+                                    keyValue = dbCol['Type']['Key']['KeyValue']
                                     if keyType == 'str':
                                         tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
                                         tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
