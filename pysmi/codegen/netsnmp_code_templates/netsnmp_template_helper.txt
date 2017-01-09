@@ -1,0 +1,23 @@
+{
+	"@@SUBSTITUTE_OVSDB_ROW_STRINGS_FOR_TABLE@@" : [
+"       const struct ovsrec_@@SUBSTITUTE_OVSDB_TABLE@@ *@@SUBSTITUTE_OVSDB_TABLE@@_row = NULL;                       "
+	],
+
+	"@@SUBSTITUTE_GET_MIB_OBJ_DECL_FOR_OCTET_STR_TYPE@@" : [
+"       @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@[@@COLUMN_OR_IDX_SIZE@@];        ",
+"       size_t @@SUBSTITUTE_IDX_OR_CLM_NAME@@_len;                                                                    "
+	],
+
+	"@@SUBSTITUTE_GET_MIB_OBJ_DECL_FOR_CHAR_TYPE@@" : [
+	],
+
+	"@@SUBSTITUTE_GET_MIB_OBJ_DECL_FOR_PRIMITIVE_TYPE@@" : [
+	],
+
+	"@@SUBSTITUTE_GET_FIRST_INSTANCE_STRINGS_FOR_TABLE@@" :[
+	],
+
+	"@@SUBSTITUTE_GET_FOR_LOOP_STR_FOR_TABLE@@" : [
+	]
+
+}

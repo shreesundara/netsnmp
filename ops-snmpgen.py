@@ -34,7 +34,7 @@ dstFormat = 'pysnmp'
 dstDirectory = os.path.join(os.path.expanduser("~"), '.pysnmp', 'mibs')
 dstDirectory = os.path.expanduser("~")
 if sys.platform[:3] == 'win':
-    dstDirectory = os.path.join(dstDirectory, 'PySNMP Configuration', 'mibs')
+    dstDirectory = os.path.join(dstDirectory, 'PySNMP_Configuration', 'mibs')
 else:
     dstDirectory = os.path.join(dstDirectory, '.pysnmp', 'mibs')
 cacheDirectory = ''
@@ -276,5 +276,5 @@ else:
         sys.stderr.write('Missing source MIBs: %s\r\n' % ', '.join(['%s' % x for x in sorted(processed) if processed[x] == 'missing']))
         sys.stderr.write('Ignored MIBs: %s\r\n' % ', '.join(['%s' % x for x in sorted(processed) if processed[x] == 'unprocessed']))
         sys.stderr.write('Failed MIBs: %s\r\n' % ', '.join(['%s (%s)' % (x,processed[x].error) for x in sorted(processed) if processed[x] == 'failed']))
-
+    raw_input("Enter any key to exit")
     sys.exit(0)

@@ -62,11 +62,14 @@ class ClangFormat():
 
     def format(self, codeFile):
         codeFile = os.path.join(self.dstPath,codeFile)
-        process = subprocess.Popen([self.clangPath + ' -style=\'{IndentWidth: 4, SortIncludes: false}\' ' + codeFile],stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=True)
+        cmd = '\"'+ self.clangPath+'\" -style="{IndentWidth: 4, SortIncludes: false}" -i \"' +codeFile+ "\""
+        print cmd
+        process = subprocess.Popen([cmd],stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=True)
+        # process = subprocess.Popen([self.clangPath + ' -style=\'{IndentWidth: 4, SortIncludes: false}\' ' + codeFile],stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=True)
         process.poll
         stdout, stderr = process.communicate()
         if stderr != '':
-            print stderr
+            #print stderr
             return ''
         return stdout
 
@@ -441,18 +444,27 @@ class NetSnmpCodeGen(AbstractCodeGen):
         self.clangFormatter = ClangFormat(path = self.clangFormatPath, dstPath = fileWriter._path)
         self.mappingFilePath = ''
         self.customFileHeaderString = ''
+        self.customFileString = ''
 
         # Global Flag to tell the functions we are generating code
         # for the main AST
         self.mainModuleFlag = 1
 
     def fileWrite(self,fileName, data):
+        if data.find('@@') >= 0:
+            startIdx = data.find('@@');
+            endIdx = data.find('@@', startIdx + 2)
+            unparsedStr = data[startIdx:endIdx+2]
+            print 'Unparsed @@ string : ' + unparsedStr + ' found while generating the file ' + fileName
+            assert 0 and 'Invalid @@ string found Aborting'
         self.fileWriter.fileWrite(fileName=fileName,data=data)
         if '.json' in fileName:
             return
         data = self.clangFormatter.format(fileName)
         if data != '':
             self.fileWriter.fileWrite(fileName=fileName,data=data)
+        #print 'Generated '+ fileName
+        return
 
     def symTrans(self, symbol):
         if symbol in self.symsTable:
@@ -1272,6 +1284,32 @@ class NetSnmpCodeGen(AbstractCodeGen):
         if not self.jsonData:
             raise Exception('Could not load json object from the mapping file')
 
+    def loadNetSnmpTemplateCodeFromFile(self,filename):
+        tmpJsonData = ''
+        try:
+            path = os.path.join(os.path.dirname(os.path.realpath(__file__)), '../codegen/netsnmp_code_templates/'+filename)
+            with open(path) as data_file:
+                filestring = ''
+                line = ''
+                for line in data_file:
+                    #if '//' not in line:
+                    #if not line.strip().startswith('//') :
+                    #if line.strip().find('//',0,2) != 0 and line[1:].strip().find('//',0,2) != 0 :
+                    if not line.strip().startswith('//') or line[1:].strip().find('//',0,2) != 0:
+                        filestring += line
+                if filename.find('netsnmp_template_helper.txt') >= 0 :
+                    tmpJsonData = json.loads(filestring)
+                    for key in tmpJsonData.keys():
+                        tmpJsonData[key] = '\n'.join([x.strip() for x in tmpJsonData[key]])
+                    if not tmpJsonData:
+                        raise Exception('Could not load json object from the netsnmp template code file {1} '.format(filename))
+                    return tmpJsonData
+                else:
+                    return filestring
+        except IOError:
+            raise Exception('failure opening netsnmp template code file %s: %s' % (path, sys.exc_info()[1]))
+        return
+
     def addSymbolsFromImports(self, parsedMibs):
         for tempast in parsedMibs:
             self.moduleName[0], moduleOid, imports, declarations = parsedMibs[tempast][2]
@@ -1281,6 +1319,230 @@ class NetSnmpCodeGen(AbstractCodeGen):
                     clausetype = declr[0]
                     classmode = clausetype == 'typeDeclaration'
                     self.handlersTable[declr[0]](self, self.prepData(declr[1:], classmode), classmode)
+
+    def doesTableSupportMultipleCardinality(self,tableName):
+        return  1 < self.tables[tableName]['Table_MibSchemaCardinalityCount']
+
+    def ovsColumnHasValidConditionType(self,tableName,idxOrClmSymbol):
+        #dbIdx = ''
+        #if idxOrClmSymbol['name'] in self.jsonData[tableName]['Indexes']:
+        #    dbIdx = self.jsonData[tableName]['Indexes'][idxOrClmSymbol['name']]
+        #elif idxOrClmSymbol['name'] in self.jsonData[tableName]['Columns']:
+        #    dbIdx = self.jsonData[tableName]['Columns'][idxOrClmSymbol['name']]
+        dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,idxOrClmSymbol)
+        if dbIdx == '':
+            return False
+        if isinstance(dbIdx['OvsColumn'],dict):
+            if 'Table_MibSchemaCardinalityConditions' not in self.jsonData[tableName]:
+                return False
+            for conditionType in dbIdx['OvsColumn'].keys():
+                if conditionType not in self.jsonData[tableName]['Table_MibSchemaCardinalityConditions']:
+                    exceptStr = 'INVALID CONDITION TYPE SPECIFIED in the mapping file for table "' + tableName + '": column "' + idxOrClmSymbol['name'] +'"\n VALID CONDITION TYPES ARE : '
+                    exceptStr += ' '.join(self.jsonData[tableName]['Table_MibSchemaCardinalityConditions'])
+                    #print exceptStr
+                    raise Exception(exceptStr)
+                    return False
+        else:
+            return False
+        return True
+
+    def checkForMultipleTypesTagInJson(self,tableName,idxOrClmSymbol):
+        #dbIdx = ''
+        #if idxOrClmSymbol['name'] in self.jsonData[tableName]['Indexes']:
+        #    dbIdx = self.jsonData[tableName]['Indexes'][idxOrClmSymbol['name']]
+        #elif idxOrClmSymbol['name'] in self.jsonData[tableName]['Columns']:
+        #    dbIdx = self.jsonData[tableName]['Columns'][idxOrClmSymbol['name']]
+        dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,idxOrClmSymbol)
+        if dbIdx == '':
+            return False
+        if 'MultipleTypes' in dbIdx :
+            if 'Table_MibSchemaCardinalityConditions' not in self.jsonData[tableName]:
+                return False
+            for conditionType in dbIdx['MultipleTypes'].keys():
+                if conditionType not in self.jsonData[tableName]['Table_MibSchemaCardinalityConditions']:
+                    exceptStr = 'INVALID CONDITION TYPE SPECIFIED in the mapping file for table "' + tableName + '": column "' + idxOrClmSymbol['name'] +'"\n VALID CONDITION TYPES ARE : '
+                    exceptStr += ' '.join(self.jsonData[tableName]['Table_MibSchemaCardinalityConditions'])
+                    #print exceptStr
+                    raise Exception(exceptStr)
+                    return False
+        else:
+            return False
+        return True
+
+    def loadSchemaObjectDetailsForGivenMibObjectFromMappingFile(self,tableName,idxOrClmSymbol):
+        ovsTableName = ''
+        ovsColumnName = ''
+        ovsTypeKey = ''
+        ovsType_KeyType = ''
+        ovsType_KeyName = ''
+        ovsCustomFnName = ''
+        dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,idxOrClmSymbol)
+        if dbIdx == '':
+            #return ['ovsTable','ovsColumn','Type_Key','Type_KeyType','Type_KeyName']
+            return ovsTableName,ovsColumnName,ovsTypeKey,ovsType_KeyType,ovsType_KeyName,ovsCustomFnName
+        else:
+            ovsTableName = self.getOvsTableNameForGivenSymbolFromMappingFile()
+            ovsColumnName = self.getOvsColumnNameForGivenSymbolFromMappingFile()
+            #tmpIndexOrColumSymbol_Type = self.getTypeForGivenSymbolFromMappingFile()
+            ovsTypeKey = self.getTypeKeyForGivenSymbolFromMappingFile()
+            ovsType_KeyType = self.getTypeKeyTypeForGivenSymbolFromMappingFile()
+            ovsType_KeyName = self.getTypeKeyNameForGivenSymbolFromMappingFile()
+            ovsCustomFnName = self.getCustomFunctionForGivenSymbolFromMappingFile()
+            return ovsTableName,ovsColumnName,ovsTypeKey,ovsType_KeyType,ovsType_KeyName,ovsCustomFnName
+
+    def getSchemaDataObjectFromMappingFileForGivenMibObject(self,tableName,idxOrClmSymbol):
+        dbIdx = ''
+        if idxOrClmSymbol['name'] in self.jsonData[tableName]['Indexes']:
+            dbIdx = self.jsonData[tableName]['Indexes'][idxOrClmSymbol['name']]
+        elif idxOrClmSymbol['name'] in self.jsonData[tableName]['Columns']:
+            dbIdx = self.jsonData[tableName]['Columns'][idxOrClmSymbol['name']]
+        return dbIdx;
+
+    def mibObjectParticipatesInMultipleCardinality(self,tableName,idxOrClmSymbol):
+        return  self.checkForMultipleTypesTagInJson(tableName,idxOrClmSymbol) or self.ovsColumnParticipatesInMultipleCardinality(tableName,idxOrClmSymbol) or self.keyParticipatesInMultipleCardinality(tableName,idxOrClmSymbol)
+
+    def ovsColumnParticipatesInMultipleCardinality(self,tableName,idxOrClmSymbol):
+            return self.ovsColumnHasValidConditionType(tableName,idxOrClmSymbol)
+
+    def getOvsTableNameForGivenSymbolFromMappingFile(self,tableName,idxOrClmSymbol):
+        dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,idxOrClmSymbol)
+        return dbIdx['OvsTable'];
+
+    def getOvsColumnNameForGivenSymbolFromMappingFile():
+        dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,idxOrClmSymbol)
+        return dbIdx['OvsColumn'];
+
+    def getTypeKeyForGivenSymbolFromMappingFile():
+        dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,idxOrClmSymbol)
+        if 'Type' in dbIdx and 'Key' in dbIdx['Type'] and dbIdx['Type']['Key'] and not isinstance(dbIdx['Type']['Key'],dict):
+            return dbIdx['Type']['Key'];
+        return ''
+
+    def getTypeKeyTypeForGivenSymbolFromMappingFile():
+        dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,idxOrClmSymbol)
+        if 'Type' in dbIdx and 'Key' in dbIdx['Type'] and dbIdx['Type']['Key'] and isinstance(dbIdx['Type']['Key'],dict) and 'Type' in dbIdx['Type']['Key']:
+            return dbIdx['Type']['Key']['Type'];
+        return ''
+
+    def getTypeKeyNameForGivenSymbolFromMappingFile():
+        dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,idxOrClmSymbol)
+        if 'Type' in dbIdx and 'Key' in dbIdx['Type'] and dbIdx['Type']['Key'] and isinstance(dbIdx['Type']['Key'],dict) and 'Type' in dbIdx['Type']['Value']:
+            return dbIdx['Type']['Key']['Value'];
+        return ''
+
+    def getCustomFunctionForGivenSymbolFromMappingFile():
+        dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,idxOrClmSymbol)
+        if 'CustomFunction' in dbIdx and dbIdx['CustomFunction']:
+            return dbIdx['CustomFunction']
+        return ''
+
+
+    def getCustomFnDefinitions(self,fnPrototype,fnBodyOptional='',tableName='',idxOrColSymbol='',appendConditionFlagParameterName=''):
+        tmpCustomFileString = fnPrototype + '{\n'
+        tmpCustomFileString  += '**** TO COMPLETE THIS FUNCTION ****\n;\n'
+        tmpCustomFileString  += fnBodyOptional
+        tmpCustomFileString  += self.getAutoGeneratedCodeForSingleOrMultipleOvsColumns(tableName,idxOrColSymbol,appendConditionFlagParameterName)
+        tmpCustomFileString += self.getAutoGeneratedCodeForSingleOrMultipleKeys(tableName,idxOrColSymbol,appendConditionFlagParameterName)
+        #tmpCustomFileString += call multiple types support code here.<Phani> TO DO
+        tmpCustomFileString  += '}\n\n'
+        return tmpCustomFileString
+
+    def keyHasValidConditionType(self,tableName,idxOrClmSymbol):
+        dbIdx = ''
+        if idxOrClmSymbol['name'] in self.jsonData[tableName]['Indexes']:
+            dbIdx = self.jsonData[tableName]['Indexes'][idxOrClmSymbol['name']]
+        elif idxOrClmSymbol['name'] in self.jsonData[tableName]['Columns']:
+            dbIdx = self.jsonData[tableName]['Columns'][idxOrClmSymbol['name']]
+        if dbIdx == '':
+            return False
+        if 'Type' in dbIdx and dbIdx['Type']['Key'] and isinstance(dbIdx['Type']['Key'],dict):
+            #if 'Type' not in dbIdx['Type']['Key']:
+            if isinstance(dbIdx['Type']['Key']['Value'],dict):
+                #for conditionType in dbIdx['Type']['Key'].keys():
+                 for conditionType in dbIdx['Type']['Key']['Value'].keys():
+                    if conditionType not in self.jsonData[tableName]['Table_MibSchemaCardinalityConditions']:
+                        exceptStr = 'INVALID CONDITION TYPE SPECIFIED in the mapping file for table "' + tableName + '": column "' + idxOrClmSymbol['name'] +'"\n VALID CONDITION TYPES ARE : '
+                        exceptStr += ' '.join(self.jsonData[tableName]['Table_MibSchemaCardinalityConditions'])
+                        #print exceptStr
+                        raise Exception(exceptStr)
+                        return False
+            else:
+                return False
+        else:
+            return False
+        return True
+
+    def keyParticipatesInMultipleCardinality(self,tableName,idxOrClmSymbol):
+        return self.keyHasValidConditionType(tableName,idxOrClmSymbol)
+
+    def getAutoGeneratedCodeForSingleOrMultipleKeys(self,tableName='',idxOrClmSymbol='',appendConditionFlagParameterName='',replaceString='NONE',ifBlockContentForKeyStrType='',ifBlockContentForKeyintType=''):
+        retString = ''
+        dbIdx = ''
+        if tableName == '' or not tableName:#for check_type_function this will be passed as ''
+            retString = '';
+            return retString
+        if idxOrClmSymbol['name'] in self.jsonData[tableName]['Indexes']:
+            dbIdx = self.jsonData[tableName]['Indexes'][idxOrClmSymbol['name']]
+        elif idxOrClmSymbol['name'] in self.jsonData[tableName]['Columns']:
+            dbIdx = self.jsonData[tableName]['Columns'][idxOrClmSymbol['name']]
+        if dbIdx == '':
+            return retString
+        ##ADD code here...
+        if self.keyParticipatesInMultipleCardinality(tableName,idxOrClmSymbol):
+            #for conditionType in dbIdx['Type']['Key'].keys():
+            for conditionType in dbIdx['Type']['Key']['Value'].keys():
+                #retString  += 'if(strcmp('+appendConditionFlagParameterName+','+self.tables[tableName]['CardinalityConditionTypeConstants'][conditionType] +') == 0 ) {\n'
+                retString  += 'if('+appendConditionFlagParameterName+'=='+self.tables[tableName]['CardinalityConditionTypeConstants'][conditionType] +') {\n'
+                #keyType = dbIdx['Type']['Key'][conditionType]['Type']
+                #keyVal = dbIdx['Type']['Key'][conditionType]['Value']
+                keyType = dbIdx['Type']['Key']['Type']
+                keyVal = dbIdx['Type']['Key']['Value'][conditionType]
+                if keyType == 'str':
+                    retString  += ifBlockContentForKeyStrType.replace(replaceString,keyVal)
+                if keyType == 'int':
+                    retString  += ifBlockContentForKeyintType.replace(replaceString,keyVal)
+                retString  += '}\n'
+            return retString
+        elif 'Type' in dbIdx and dbIdx['Type']['Key'] and isinstance(dbIdx['Type']['Key'],dict):#i.e. for single entry it should be as usual.
+            keyType = dbIdx['Type']['Key']['Type']
+            keyVal = dbIdx['Type']['Key']['Value']
+            if keyType == 'str':
+                retString  += ifBlockContentForKeyStrType.replace(replaceString,keyVal)
+            if keyType == 'int':
+                retString  += ifBlockContentForKeyintType.replace(replaceString,keyVal)
+            return retString
+        else:
+            return ''
+        return ''
+
+    def getAutoGeneratedCodeForSingleOrMultipleOvsColumns(self,tableName='',tableColmnOrIdxSymbol='',appendConditionFlagParameterName='',replaceString='NONE',ifBlockContent=''):
+        retString = ''
+        dbIdx = ''
+        if tableName == '' or not tableName: #for check_type_function this will be passed as ''
+            retString = '';
+            return retString
+        if tableColmnOrIdxSymbol['name'] in self.jsonData[tableName]['Indexes']:
+            dbIdx = self.jsonData[tableName]['Indexes'][tableColmnOrIdxSymbol['name']]
+        elif tableColmnOrIdxSymbol['name'] in self.jsonData[tableName]['Columns']:
+            dbIdx = self.jsonData[tableName]['Columns'][tableColmnOrIdxSymbol['name']]
+        if dbIdx == '':
+            return retString
+        if self.doesTableSupportMultipleCardinality(tableName):
+            #if tableColmnOrIdxSymbol['name'] in self.jsonData[tableName]['Table_MibColumnsParticipatingInMultipleCardinality']:
+            if self.ovsColumnParticipatesInMultipleCardinality(tableName,tableColmnOrIdxSymbol):
+                #if isinstance(dbIdx['OvsColumn'],dict) :
+                for tmpDictKey in dbIdx['OvsColumn'].keys() :
+                    #retString  += 'if(strcmp('+appendConditionFlagParameterName+','+self.tables[tableName]['CardinalityConditionTypeConstants'][tmpDictKey] +') == 0 ) {\n'
+                    retString  += 'if('+appendConditionFlagParameterName+'=='+self.tables[tableName]['CardinalityConditionTypeConstants'][tmpDictKey] +') {\n'
+                    #tableOvsdbGetString += 'temp = (char*)'+idxTable + '_row->' + dbIdx['OvsColumn'][tmpDictKey] + ';\n'
+                    #retString  += '********** COMPLETE *** THIS *** IF **** BLOCK *************'
+                    retString  += ifBlockContent.replace(replaceString,dbIdx['OvsColumn'][tmpDictKey])
+                    retString  += '}\n'
+                return retString
+        else :
+            retString  += ifBlockContent.replace(replaceString,dbIdx['OvsColumn'])
+            return retString
+        return ''
 
     def genCode(self, ast, symbolTable, **kwargs):
         self.genRules['text'] = kwargs.get('genTexts', False)
@@ -1363,8 +1625,8 @@ class NetSnmpCodeGen(AbstractCodeGen):
         return MibInfo(oid=None, name=self.moduleName[0], imported=tuple([ x for x in importedModules if x not in fakeMibs])), out
 
     def genCustomFiles(self, moduleName):
-        customFileString = '// Define Custom Functions for ' + moduleName + ' MIB in this fileName'
-        self.fileWrite(fileName = moduleName + '_custom.c', data=customFileString)
+        self.customFileString = '// Define Custom Functions for ' + moduleName + ' MIB in this fileName\n\n' + '#include "' +moduleName.upper() + '_custom.h"\n\n' + self.customFileString
+        self.fileWrite(fileName = moduleName + '_custom.c', data=self.customFileString)
         tempStartString = '#ifndef ' + moduleName.upper() + '_CUSTOM_H\n'
         tempStartString += '#define ' + moduleName.upper() + '_CUSTOM_H\n\n'
         tempStartString += """#include <net-snmp/net-snmp-config.h>
@@ -1374,6 +1636,23 @@ class NetSnmpCodeGen(AbstractCodeGen):
 #include "vswitch-idl.h"
 
 """
+        tmpConditionTypeConstants = ''
+        for key in self.tables.keys():
+            tableName = key
+            if tableName in self.jsonData:
+                if self.jsonData[tableName]['MibType'] != 'Table':
+                    raise Exception('%s is not a table',tableName)
+                if(self.doesTableSupportMultipleCardinality(tableName)):
+                    #for tmpConstantName,tmpConstantVal in self.tables[tableName]['CardinalityConditionTypeConstants'].items():
+                    #    tmpConditionTypeConstants += '#define ' + tmpConstantVal + ' "' + tmpConstantName  + '"\n
+                    tmpCnstVal = 1
+                    for conditionTypeConstantEnum in self.tables[tableName]['CardinalityConditionTypeConstants'].values():
+                        tmpConditionTypeConstants += '#define ' + conditionTypeConstantEnum + ' ' + str(tmpCnstVal)  + '\n'
+                        tmpCnstVal += 1
+            else:
+                continue
+
+        tempStartString += tmpConditionTypeConstants + '\n';
         self.customFileHeaderString = tempStartString + self.customFileHeaderString
         self.customFileHeaderString += '#endif'
         self.fileWrite(fileName = moduleName + '_custom.h', data=self.customFileHeaderString)
@@ -1487,6 +1766,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
                     outStr += 'ovsdb_get_' + name + '(idl, &netsnmp_' + name + ');\n'
             else:
                 outStr += 'const struct ovsrec_' + jsonValue['OvsTable'] + ' *' + jsonValue['OvsTable'] + '_row = ovsrec_' + jsonValue['OvsTable'] + '_first(idl);\n'
+                outStr += 'if ('+jsonValue['OvsTable']+'_row == NULL) {\n snmp_log(LOG_ERR, "not able to fetch ' + jsonValue['OvsTable'] + ' row");\n return -1;\n}\n'
                 if scalarType == 'OctetString' or scalarType == 'ObjectIdentifier':
                     outStr += 'ovsdb_get_' + name + '(idl, ' + jsonValue['OvsTable'] + '_row, netsnmp_' + name + ', &netsnmp_' + name + '_len);\n'
                 else:
@@ -1736,124 +2016,340 @@ class NetSnmpCodeGen(AbstractCodeGen):
         tables = []
         for col, val in self.jsonData[tableName]['Columns'].items():
             if val['OvsTable'] and (val['OvsTable'], val['OvsColumn']) not in tables:
-                tables.append((val['OvsTable'], val['OvsColumn']))
+                if isinstance(val['OvsColumn'],dict):
+                    for individualCols in val['OvsColumn'].values():
+                        tables.append((val['OvsTable'], individualCols))
+                else:
+                    tables.append((val['OvsTable'], val['OvsColumn']))
         for idx, val in self.jsonData[tableName]['Indexes'].items():
             if val['OvsTable'] and (val['OvsTable'], val['OvsColumn']) not in tables:
                 tables.append((val['OvsTable'],val['OvsColumn']))
         return tables
 
-    def getOvsdbRowsStringForTable(self, tables):
+    def getOvsdbRowsStringForTable(self, tableName):
+        ovsdbTables = self.getOvsdbRowsForTable(tableName)
+        #templateJsonObject = self.loadNetSnmpTemplateCodeFromFile('tableName_data_access.c.template')
+        tmplate = self.loadNetSnmpTemplateCodeFromFile('netsnmp_template_helper.txt')['@@SUBSTITUTE_OVSDB_ROW_STRINGS_FOR_TABLE@@']
         outStr = ''
-        for tbl in tables:
-            outStr += 'const struct ovsrec_' + tbl + ' *' + tbl + '_row = NULL;\n'
+        for tbl in ovsdbTables :
+#            tmpStr = """
+#    const struct ovsrec_@@SUBSTITUTE_OVSDB_TABLE@@ *@@SUBSTITUTE_OVSDB_TABLE@@_row = NULL;
+#"""
+            tmpStr = tmplate
+            tmpStr = tmpStr.replace('@@SUBSTITUTE_OVSDB_TABLE@@',tbl)
+            outStr += tmpStr
+        tmplate = ''
         return outStr + '\n'
 
-    def getLocalsStringForTable(self, tableName, indexes):
+    def getLocalsStringForTable(self, tableName):
         outStr = ''
-        for idx in indexes:
-            idxType = self.getObjTypeString(idx)
-            if idxType == 'OctetString':
-                stringLength = self.getStringLength(idx)
-                outStr += 'char ' + idx['name'] + '[' + str(stringLength) + '];\n'
-                outStr += 'size_t ' + idx['name'] + '_len;\n'
-            elif idxType == 'ObjectIdentifier':
-                outStr += 'oid ' + idx['name'] + '[MAX_OID_LEN];\n'
-                outStr += 'size_t ' + idx['name'] + '_len;\n'
-            else:
-                outStr += self.ctypeClasses[idxType] + ' ' + idx['name'] + ';\n'
+        outStr += self.getAllIdxClmDeclarationsForGivenTable(tableName)
         outStr += '\n'
-        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-            if col['name'] not in [idx['name'] for idx in indexes]:
-                colType = self.getObjTypeString(col)
-                if colType == 'OctetString':
-                    stringLength = self.getStringLength(col)
-                    outStr += 'char ' + col['name'] + '[' + str(stringLength) + '];\n'
-                    outStr += 'size_t ' + col['name'] + '_len;\n'
-                elif colType == 'ObjectIdentifier':
-                    outStr += 'oid ' + col['name'] + '[MAX_OID_LEN];\n'
-                    outStr += 'size_t ' + col['name'] + '_len;\n'
-                else:
-                    outStr += self.ctypeClasses[colType] + ' ' + col['name'] + ';\n'
+        outStr += self.getAllNonIdxClmDeclarationsForGivenTable(tableName)
         return outStr + '\n'
 
-    def getFirstIntanceStringForTable(self, tableName, tables):
+    def getFirstIntanceStringForTable(self, tableName):
+        ovsdbTables = self.getOvsdbRowsForTable(tableName)
         outStr = ''
-        for tbl in tables:
-            outStr += tbl + '_row = ovsrec_' + tbl + '_first(idl);\n'
-            outStr += 'if (!' + tbl + '_row) {\n'
-            outStr += 'snmp_log(LOG_ERR, "not able to fetch ' + tbl + ' row");\n'
-            outStr += 'return -1;\n'
-            outStr += '}\n\n'
+        for tbl in ovsdbTables:
+            tmpStr = """
+    @@SUBSTITUTE_OVSDB_TABLE@@_row = ovsrec_@@SUBSTITUTE_OVSDB_TABLE@@_first(idl);
+    if (!@@SUBSTITUTE_OVSDB_TABLE@@_row) {
+        snmp_log(LOG_ERR, "not able to fetch @@SUBSTITUTE_OVSDB_TABLE@@ row");
+        return -1;
+    }
+
+"""
+            tmpStr = tmpStr.replace('@@SUBSTITUTE_OVSDB_TABLE@@',tbl)
+            outStr += tmpStr
         return outStr
 
-    def getForLoopStringForTable(self, tableName, indexes):
+    def getTableSkipFnCall(self,tableName):
         outStr = ''
-        table = self.jsonData[tableName]['RootOvsTable']
-        outStr += 'OVSREC_' + table.upper() + '_FOR_EACH(' + table + '_row, idl) {\n'
         if self.jsonData[tableName]['SkipFunction']:
-            outStr += 'if(' + self.jsonData[tableName]['SkipFunction'] + '(idl, ' + table + '_row)) {\n'
-            outStr += 'continue;\n'
-            outStr += '}\n'
-            self.customFileHeaderString += 'int ' + self.jsonData[tableName]['SkipFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + table + ' *' + table + '_row);\n\n'
-        for idx in indexes:
-            idxTable = self.jsonData[tableName]['Indexes'][idx['name']]['OvsTable']
-            idxType = self.getObjTypeString(idx)
-            if idxTable and idxTable != table:
-                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
-                    outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, ' + idxTable + '_row, ' + idx['name'] + ', &' + idx['name'] + '_len);\n'
-                else:
-                    outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, ' + idxTable + '_row, &' + idx['name'] + ');\n'
+            skipFnName = self.jsonData[tableName]['SkipFunction']
+            rootOvsTable = self.jsonData[tableName]['RootOvsTable']
+            outStr = """
+    if(@@SUBSTITUTE_SKIP_FN_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL@@_row)) {
+        continue;
+}
+"""
+            tmpCusFileHdrStr = """
+int @@SUBSTITUTE_SKIP_FN_NAME@@(struct ovsdb_idl *idl,
+                                const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL@@ *@@SUBSTITUTE_ROOT_OVS_TBL@@_row);
+
+"""
+            tmpCusFileHdrStr = tmpCusFileHdrStr.replace('@@SUBSTITUTE_SKIP_FN_NAME@@',skipFnName)
+            tmpCusFileHdrStr = tmpCusFileHdrStr.replace('@@SUBSTITUTE_ROOT_OVS_TBL@@',rootOvsTable)
+            self.customFileHeaderString += tmpCusFileHdrStr
+
+            outStr = outStr.replace('@@SUBSTITUTE_SKIP_FN_NAME@@',skipFnName)
+            outStr = outStr.replace('@@SUBSTITUTE_ROOT_OVS_TBL@@',rootOvsTable)
+        return outStr
+
+    def getOvsdbGetForGivenClmOrIdx(self,tableName,rootOvsTbl,clmOrIdxSymbol,useSchemaSpecifiedCardinality,tmpAppendTypeBasedFlagParameter):
+        tmpStr = ''
+        appendTypeBasedFlagParameter = tmpAppendTypeBasedFlagParameter
+        if useSchemaSpecifiedCardinality:
+            #if idx['name'] in self.jsonData[tableName]['Table_MibColumnsParticipatingInMultipleCardinality']:
+            if self.mibObjectParticipatesInMultipleCardinality(tableName,clmOrIdxSymbol):
+                appendTypeBasedFlagParameter = tmpAppendTypeBasedFlagParameter
             else:
-                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
-                    outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, ' + idx['name'] + ', &' + idx['name'] + '_len);\n'
-                else:
-                    outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, &' + idx['name'] + ');\n'
-        outStr += '\n'
+                appendTypeBasedFlagParameter = ''
+
+        dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,clmOrIdxSymbol)
+        idxTable = dbIdx['OvsTable']
+        idxType = self.getObjTypeString(clmOrIdxSymbol)
+        if idxTable and idxTable != rootOvsTbl:
+            if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                #outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, ' + idxTable + '_row, ' + idx['name'] + ', &' + idx['name'] + '_len);\n'
+                tmpStr = """
+    ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL@@_row, @@SUBSTITUTE_LOCAL_OVS_TBL@@_row, @@SUBSTITUTE_IDX_OR_CLM_NAME@@, &@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len @@SUBSTITUTE_APPEND_TYPE_BASED_FLAG_PARAM@@);
+"""
+            else:
+                #outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, ' + idxTable + '_row, &' + idx['name'] + ');\n'
+                tmpStr = """
+    ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL@@_row, @@SUBSTITUTE_LOCAL_OVS_TBL@@_row, &@@SUBSTITUTE_IDX_OR_CLM_NAME@@ @@SUBSTITUTE_APPEND_TYPE_BASED_FLAG_PARAM@@);
+"""
+        else:
+            if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                #outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, ' + idx['name'] + ', &' + idx['name'] + '_len);\n'
+                tmpStr = """
+    ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL@@_row, @@SUBSTITUTE_IDX_OR_CLM_NAME@@, &@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len @@SUBSTITUTE_APPEND_TYPE_BASED_FLAG_PARAM@@);
+"""
+            else:
+                #outStr += 'ovsdb_get_' + idx['name'] + '(idl, ' + table + '_row, &' + idx['name'] + ');\n'
+                tmpStr = """
+    ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL@@_row, &@@SUBSTITUTE_IDX_OR_CLM_NAME@@ @@SUBSTITUTE_APPEND_TYPE_BASED_FLAG_PARAM@@);
+"""
+        tmpStr += '\n'
+        tmpStr = tmpStr.replace('@@SUBSTITUTE_ROOT_OVS_TBL@@',rootOvsTbl)
+        if idxTable:
+            tmpStr = tmpStr.replace('@@SUBSTITUTE_LOCAL_OVS_TBL@@',idxTable)
+        tmpStr = tmpStr.replace('@@SUBSTITUTE_APPEND_TYPE_BASED_FLAG_PARAM@@',appendTypeBasedFlagParameter)
+        tmpStr = self.parseColSpecificSubstitutionsAndReturnActualString(tmpStr,tableName,clmOrIdxSymbol)
+
+        return tmpStr
+
+
+    def getOvsdbGetFnCallsForAllClms(self,tableName,rootOvsTbl,indexes,useSchemaSpecifiedCardinality,tmpAppendTypeBasedFlagParameter):
+        tmpStr = ''
+
+        for idx in indexes:
+            tmpStr += self.getOvsdbGetForGivenClmOrIdx(tableName,rootOvsTbl,idx,useSchemaSpecifiedCardinality,tmpAppendTypeBasedFlagParameter)
+
         for col in self.tableRows[self.tables[tableName]['row']]['columns']:
             if col['name'] in [idx['name'] for idx in indexes]:
                 continue
-            colTable = self.jsonData[tableName]['Columns'][col['name']]['OvsTable']
-            colType = self.getObjTypeString(col)
-            if colTable and colTable != table:
-                if colType == 'OctetString' or colType == 'ObjectIdentifier':
-                    outStr += 'ovsdb_get_' + col['name'] + '(idl, ' + table + '_row, ' + colTable + '_row, ' + col['name'] + ', &' + col['name'] + '_len);\n'
-                else:
-                    outStr += 'ovsdb_get_' + col['name'] + '(idl, ' + table + '_row, ' + colTable + '_row, &' + col['name'] + ');\n'
-            else:
-                if colType == 'OctetString' or colType == 'ObjectIdentifier':
-                    outStr += 'ovsdb_get_' + col['name'] + '(idl, ' + table + '_row, ' + col['name'] + ', &' + col['name'] + '_len);\n'
-                else:
-                    outStr += 'ovsdb_get_' + col['name'] + '(idl, ' + table + '_row, &' + col['name'] + ');\n'
-        outStr += '\n'
-        outStr += 'rowreq_ctx = ' + tableName + '_allocate_rowreq_ctx(NULL);\n'
-        outStr += 'if (rowreq_ctx == NULL) {\n'
-        outStr += 'snmp_log(LOG_ERR, "memory allocation failed");\n'
-        outStr += 'return MFD_RESOURCE_UNAVAILABLE;\n'
-        outStr += '}\n'
-        outStr += 'if (MFD_SUCCESS != ' + tableName + '_indexes_set( rowreq_ctx'
+            tmpStr += self.getOvsdbGetForGivenClmOrIdx(tableName,rootOvsTbl,col,useSchemaSpecifiedCardinality,tmpAppendTypeBasedFlagParameter)
+
+        outStr = """
+    rowreq_ctx = @@SUBSTITUTE_TABLE_NAME@@_allocate_rowreq_ctx(NULL);
+
+    if (rowreq_ctx == NULL) {
+        snmp_log(LOG_ERR, "memory allocation failed");
+        return MFD_RESOURCE_UNAVAILABLE;
+    }
+
+    if (MFD_SUCCESS != @@SUBSTITUTE_TABLE_NAME@@_indexes_set( rowreq_ctx @@SUBSTITUTE_ALL_LOCAL_IDX_COL_DECLNS_AS_FUNC_CALL_PARAMS@@) ) {
+        snmp_log(LOG_ERR, "error setting indexes while loading");
+        @@SUBSTITUTE_TABLE_NAME@@_release_rowreq_ctx(rowreq_ctx);
+        continue;
+    }
+
+    @@SUBSTITUTE_POPULATE_VALUES_INTO_SNMP_ROW_REQ_PTR@@
+
+    CONTAINER_INSERT(container, rowreq_ctx);
+    ++count;
+
+"""
+
+        row_idx_params = ''
         for idx in indexes:
             idxType = self.getObjTypeString(idx)
             if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
-                outStr += ', ' + idx['name'] + ', ' + idx['name'] + '_len'
+                row_idx_params  += ', ' + idx['name'] + ', ' + idx['name'] + '_len'
             else:
-                outStr += ', ' + idx['name']
-        outStr += ')) {\n'
-        outStr += 'snmp_log(LOG_ERR, "error setting indexes while loading");\n'
-        outStr += tableName + '_release_rowreq_ctx(rowreq_ctx);\n'
-        outStr += 'continue;\n'
-        outStr += '}\n\n'
+                row_idx_params  += ', ' + idx['name']
+
+        row_req_single_col_populated_vals = ''
+        row_req_all_col_populated_vals = ''
         for col in self.tableRows[self.tables[tableName]['row']]['columns']:
             if col['name'] in [idx['name'] for idx in indexes]:
                 continue
             colType = self.getObjTypeString(col)
             if colType == 'OctetString' or colType == 'ObjectIdentifier':
-                outStr += 'rowreq_ctx->data.' + col['name'] + '_len = ' + col['name'] + '_len* sizeof(' + col['name'] + '[0]);\n'
-                outStr += 'memcpy(rowreq_ctx->data.' + col['name'] + ', ' + col['name'] + ', ' + col['name'] + '_len* sizeof(' + col['name'] + '[0]));\n'
+                row_req_single_col_populated_vals = """
+    rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len = @@SUBSTITUTE_IDX_OR_CLM_NAME@@_len* sizeof(@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0]);
+    memcpy(rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@,@@SUBSTITUTE_IDX_OR_CLM_NAME@@,@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len* sizeof(@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0]));
+"""
             else:
-                outStr += 'rowreq_ctx->data.' + col['name'] + ' = ' + col['name'] + ';\n'
-        outStr += 'CONTAINER_INSERT(container, rowreq_ctx);\n'
-        outStr += '++count;\n'
-        return outStr + '}\n'
+                row_req_single_col_populated_vals = """
+    rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@ = @@SUBSTITUTE_IDX_OR_CLM_NAME@@;
+"""
+            row_req_single_col_populated_vals = row_req_single_col_populated_vals.replace('@@SUBSTITUTE_IDX_OR_CLM_NAME@@', col['name'])
+            row_req_all_col_populated_vals += row_req_single_col_populated_vals
+
+        outStr = outStr.replace('@@SUBSTITUTE_TABLE_NAME@@',tableName)
+        outStr = outStr.replace('@@SUBSTITUTE_ALL_LOCAL_IDX_COL_DECLNS_AS_FUNC_CALL_PARAMS@@',row_idx_params)
+        outStr = outStr.replace('@@SUBSTITUTE_POPULATE_VALUES_INTO_SNMP_ROW_REQ_PTR@@',row_req_all_col_populated_vals)
+
+        tmpStr += outStr
+        return tmpStr
+
+
+    def getOvsdbGetFnCallsForAllConditionTypes(self,tableName,rootOvsTbl,indexes,useSchemaSpecifiedCardinality) :
+        repeatCount = 1;
+        generateForIpv4 = False
+        outStr = ''
+        tmpStr = ''
+        appendTypeBasedFlagParameter = ''
+
+        if useSchemaSpecifiedCardinality:
+            repeatCount = self.tables[tableName]['Table_MibSchemaCardinalityCount']
+        else:
+            if(self.tables[tableName]['supportsBothIpv4Ipv6']):
+                #appendTypeBasedFlagParameter = " ,int isIpv4" #must always be the last parameter of the function
+                generateForIpv4 = True
+                repeatCount = 2;
+            else:
+                #appendTypeBasedFlagParameter = "" #must always be the last parameter of the function
+                repeatCount = 1;
+
+        #repeat the following entire block (till return statement excluding return statement) within 2 iff's
+        #one for ipv4 and one for ipv6
+        while(repeatCount > 0):
+
+            if useSchemaSpecifiedCardinality:
+                tmpAppendTypeBasedFlagParameterName = self.tables[tableName]['CardinalityConditionTypeConstants'].values()[self.tables[tableName]['Table_MibSchemaCardinalityCount'] - repeatCount]
+                tmpAppendTypeBasedFlagParameter = ', '+tmpAppendTypeBasedFlagParameterName
+                appendTypeBasedFlagParameter = tmpAppendTypeBasedFlagParameter
+                tmpStr = """
+    if(@@SUBSTITUTE_APPEND_PARAM_NAME_LOWER@@_check_custom_function(idl,@@SUBSTITUTE_ROOT_OVS_TBL@@_row)) {
+
+        @@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_IDX_OR_CLM@@
+
+    }
+"""
+
+                tmpStr = tmpStr.replace('@@SUBSTITUTE_APPEND_PARAM_NAME_LOWER@@',tmpAppendTypeBasedFlagParameterName.lower())
+
+                tmpFnPrototype = """
+int @@SUBSTITUTE_APPEND_PARAM_NAME_LOWER@@_check_custom_function(
+                                                                  struct ovsdb_idl *idl, 
+                                                                  const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL@@ *@@SUBSTITUTE_ROOT_OVS_TBL@@_row)"""
+                tmpFnPrototype = tmpFnPrototype.replace('@@SUBSTITUTE_APPEND_PARAM_NAME_LOWER@@',tmpAppendTypeBasedFlagParameterName.lower())
+                tmpFnPrototype = tmpFnPrototype.replace('@@SUBSTITUTE_ROOT_OVS_TBL@@',rootOvsTbl)
+
+                tmpFnBody = """
+    /*return 1 - if @@SUBSTITUTE_APPEND_PARAM_NAME@@ type or */
+    /*return 0 - if not @@SUBSTITUTE_APPEND_PARAM_NAME@@ type */
+"""
+
+                tmpFnBody = tmpFnBody.replace('@@SUBSTITUTE_ROOT_OVS_TBL@@',rootOvsTbl)
+                tmpFnBody = tmpFnBody.replace('@@SUBSTITUTE_APPEND_PARAM_NAME@@',tmpAppendTypeBasedFlagParameterName)
+
+                self.customFileHeaderString += tmpFnPrototype + ';\n\n'
+                self.customFileString += self.getCustomFnDefinitions(tmpFnPrototype,tmpFnBody)
+                #self.customFileHeaderString += 'int ' + tmpAppendTypeBasedFlagParameterName.lower()  + '_check_custom_function(struct ovsdb_idl *idl, const struct ovsrec_' + table + ' *' + table + '_row);\n\n'
+                #self.customFileString += 'int ' + tmpAppendTypeBasedFlagParameterName.lower()  + '_check_custom_function(struct ovsdb_idl *idl, const struct ovsrec_' + table + ' *' + table + '_row) {\n'
+                #self.customFileString += ' **** TO COMPLETE THIS FUNCTION ****\n /*return 1 - if ' +tmpAppendTypeBasedFlagParameterName   + ' type or */\n /*return 0 - if not ' + tmpAppendTypeBasedFlagParameterName+ ' type */\n }\n\n'
+            elif(self.tables[tableName]['supportsBothIpv4Ipv6']):
+                if(generateForIpv4):
+                    appendTypeBasedFlagParameter = ', 1'
+                    #outStr += 'if(' + table + 'Table_check_inetv4_custom_function(idl,' + table + '_row)) {\n'
+                    tmpStr = """
+if(@@SUBSTITUTE_ROOT_OVS_TBL@@Table_check_inetv4_custom_function(idl,@@SUBSTITUTE_ROOT_OVS_TBL@@_row)) {
+
+    @@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_IDX_OR_CLM@@
+
+}
+"""
+
+                    tmpFnPrototype = """
+int @@SUBSTITUTE_ROOT_OVS_TBL@@Table_check_inetv4_custom_function(
+                            struct ovsdb_idl *idl,
+                            const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL@@ *@@SUBSTITUTE_ROOT_OVS_TBL@@_row)"""
+                    tmpFnPrototype = tmpFnPrototype.replace('@@SUBSTITUTE_ROOT_OVS_TBL@@',rootOvsTbl)
+
+                    tmpFnBody = """
+/*return 1 - if ipv4 version*/
+/*return 0 - if not ipv4 version*/
+"""
+
+                    self.customFileHeaderString += tmpFnPrototype + ';\n\n'
+                    self.customFileString += self.getCustomFnDefinitions(tmpFnPrototype,tmpFnBody)
+                    #self.customFileHeaderString += 'int ' + table + 'Table_check_inetv4_custom_function(struct ovsdb_idl *idl, const struct ovsrec_' + table + ' *' + table + '_row);\n\n'
+                    #self.customFileString += 'int ' + table + 'Table_check_inetv4_custom_function(struct ovsdb_idl *idl, const struct ovsrec_' + table + ' *' + table + '_row) {\n'
+                    #self.customFileString += ' **** TO COMPLETE THIS FUNCTION ****\n /*return 1 - if ipv4 version*/\n /*return 0 - if not ipv4 version*/\n }\n\n'
+                else:
+                    appendTypeBasedFlagParameter = ', 0'
+                    #outStr += 'if(' + table + 'Table_check_inetv6_custom_function(idl,' + table + '_row)) {\n'
+                    tmpStr = """
+if(@@SUBSTITUTE_ROOT_OVS_TBL@@Table_check_inetv6_custom_function(idl,@@SUBSTITUTE_ROOT_OVS_TBL@@_row)) {
+
+    @@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_IDX_OR_CLM@@
+
+}
+"""
+
+                    tmpFnPrototype = """
+int @@SUBSTITUTE_ROOT_OVS_TBL@@Table_check_inetv6_custom_function(
+                                                                struct ovsdb_idl *idl, 
+                                                                const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL@@ *@@SUBSTITUTE_ROOT_OVS_TBL@@_row)"""
+                    tmpFnPrototype = tmpFnPrototype.replace('@@SUBSTITUTE_ROOT_OVS_TBL@@',rootOvsTbl)
+
+                    tmpFnBody = """
+/*return 1 - if ipv6 version*/
+/*return 0 - if not ipv6 version*/
+"""
+                    self.customFileHeaderString += tmpFnPrototype + ';\n\n'
+                    self.customFileString += self.getCustomFnDefinitions(tmpFnPrototype,tmpFnBody)
+                    #self.customFileHeaderString += 'int ' + table + 'Table_check_inetv6_custom_function(struct ovsdb_idl *idl, const struct ovsrec_' + table + ' *' + table + '_row);\n\n'
+                    #self.customFileString += 'int ' + table + 'Table_check_inetv6_custom_function(struct ovsdb_idl *idl, const struct ovsrec_' + table + ' *' + table + '_row) {\n'                    self.customFileString += ' **** TO DO : COMPLETE THIS FUNCTION ****\n /*return 1 - if ipv6 version*/ \n /*return 0 - if not ipv6 version*/ \n }\n\n'
+            else:#if there are no condition types at all..
+                appendTypeBasedFlagParameter = ''
+                tmpStr = """
+    @@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_IDX_OR_CLM@@
+"""
+
+            tmpStr = tmpStr.replace('@@SUBSTITUTE_ROOT_OVS_TBL@@',rootOvsTbl)
+            tmpStr = tmpStr.replace('@@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_IDX_OR_CLM@@',self.getOvsdbGetFnCallsForAllClms(tableName,rootOvsTbl ,indexes,useSchemaSpecifiedCardinality,appendTypeBasedFlagParameter))
+
+            outStr += tmpStr
+
+            generateForIpv4 = False
+            repeatCount -= 1
+            ##substitute each time in this loop...
+
+        #end of python repetetion while loop..
+        return outStr
+
+
+    def getForLoopStringForTable(self, tableName):
+        indexes = self.getIndexesForTable(tableName)
+        outStr = ''
+        table = self.jsonData[tableName]['RootOvsTable']
+        useSchemaSpecifiedCardinality = self.doesTableSupportMultipleCardinality(tableName)
+
+        outStr += """
+    OVSREC_@@SUBSTITUTE_ROOT_OVS_TBL_UPPER@@_FOR_EACH(@@SUBSTITUTE_ROOT_OVS_TBL@@_row, idl) {
+
+        @@SUBSTITUTE_TABLE_SKIP_FN_CALL@@
+
+        @@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_CONDITION_TYPES@@
+
+    }//end of for-each loop..
+
+"""
+
+        outStr = outStr.replace('@@SUBSTITUTE_ROOT_OVS_TBL@@',table)
+        outStr = outStr.replace('@@SUBSTITUTE_ROOT_OVS_TBL_UPPER@@',table.upper())
+        outStr = outStr.replace('@@SUBSTITUTE_TABLE_SKIP_FN_CALL@@',self.getTableSkipFnCall(tableName))
+        outStr = outStr.replace('@@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_CONDITION_TYPES@@', self.getOvsdbGetFnCallsForAllConditionTypes(tableName,table,indexes,useSchemaSpecifiedCardinality))
+
+        return outStr
+
 
     def getIndexesForTable(self, tableName):
         indexes = []
@@ -1865,1452 +2361,1321 @@ class NetSnmpCodeGen(AbstractCodeGen):
                 indexes.append(self._out[col])
         return indexes
 
+    def getNonIdxClmsOfGivenTable(self,tableName):
+        clms = []
+        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+            if col['name'] not in self.tableRows[self.tables[tableName]['row']]['index']:
+            #if col['name'] not in [idx['name'] for idx in indexes]:
+                clms.append(col)
+        return clms
+
+    def getAllClmsOfGivenTable(self,tableName):
+        clms = []
+        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+                clms.append(col)
+        return clms
+
+    def getIdxOrClmSize(self,tableName,clmOrIdx):
+        if self.getObjTypeString(clmOrIdx) == 'OctetString':
+            stringLength = self.getStringLength(clmOrIdx)
+            return str(stringLength)
+        elif self.getObjTypeString(clmOrIdx) == 'ObjectIdentifier':
+            return 'MAX_OID_LEN'
+        else:
+            return ''
+
+    def getIdxOrColTypeEquivalentInC(self,tableName,clmOrIdx):
+        if self.getObjTypeString(clmOrIdx) == 'OctetString':
+            return 'char'
+        elif self.getObjTypeString(clmOrIdx) == 'ObjectIdentifier':
+            return 'oid'
+            # Verify if this is the thing for oid
+        else:
+            return self.ctypeClasses[self.getObjTypeString(clmOrIdx)]
+
+    def getIdxOrClmDeclarationOfGivenTableIdxOrClm(self,tableName,clmOrIdx):
+        tmpStr = ''
+        clmOrIdxName = clmOrIdx['name']
+        if self.getObjTypeString(clmOrIdx) == 'OctetString':
+            stringLength = self.getStringLength(clmOrIdx)
+            tmpStr = """
+@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@[@@COLUMN_OR_IDX_SIZE@@];
+size_t @@SUBSTITUTE_IDX_OR_CLM_NAME@@_len;
+"""
+        elif self.getObjTypeString(clmOrIdx) == 'ObjectIdentifier':
+            tmpStr = """
+@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@[@@COLUMN_OR_IDX_SIZE@@];
+size_t @@SUBSTITUTE_IDX_OR_CLM_NAME@@_len;
+"""
+        else:
+            tmpStr = """
+@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@;
+"""
+        tmpStr = self.parseColSpecificSubstitutionsAndReturnActualString(tmpStr,tableName,clmOrIdx)
+        return tmpStr
+
+
+    def getAllNonIdxClmDeclarationsForGivenTable(self,tableName):
+        tmpStr = ''
+        colms = self.getNonIdxClmsOfGivenTable(tableName)
+        for col in colms :
+                tmpStr += self.getIdxOrClmDeclarationOfGivenTableIdxOrClm(tableName,col)
+        return tmpStr
+
+    def getAllIdxClmDeclarationsForGivenTable(self,tableName):
+        tmpStr = ''
+        indexes = self.getIndexesForTable(tableName)
+        for idx in indexes:
+            tmpStr += self.getIdxOrClmDeclarationOfGivenTableIdxOrClm(tableName,idx)
+        return tmpStr
+
+    def getOidForGivenTable(self,tableName):
+        oidStr,parentOid = self.tables[tableName]['data']['oid']
+        oidStr = oidStr.replace('[','').replace(']','')
+        return oidStr
+
+    def getMaxNonIdxColumnForGivenTable(self,tableName):
+        return self.tableRows[self.tables[tableName]['row']]['columns'][-1]['name'].upper()
+
+    def getMinNonIdxColumnForGivenTable(self,tableName):
+        minColumn = None
+        allCols = self.getAllClmsOfGivenTable(tableName)
+        indexes = self.getIndexesForTable(tableName)
+        for col in allCols:
+            if col not in indexes and not minColumn:
+                minColumn = col
+                break
+        return minColumn['name'].upper()
+
+    def getIdxOrClmOid(self,tableName,clmOrIdxSym):
+        tempOid, tempParentOid = clmOrIdxSym['oid']
+        tempOid = tempOid[tempOid.rfind(',') + 1:tempOid.rfind(']')]
+        return tempOid
+
+    def getClmnOidHashDefinesForGivenTable(self,tableName,clmOrIdxSym):
+        hashDefine = """
+#define COLUMN_@@SUBSTITUTE_IDX_OR_CLM_NAME_UPPER@@ @@SUBSTITUTE_COLUMN_OID@@
+"""
+        hashDefine = self.parseColSpecificSubstitutionsAndReturnActualString(hashDefine,tableName,clmOrIdxSym)
+        return hashDefine
+
+    def getHashDefinesOfAllColumnOidsForGivenTable(self,tableName):
+        minColumn = None
+        allTableCols = self.getAllClmsOfGivenTable(tableName)
+        tmpStr = ''
+        for col in allTableCols:
+            #if col not in indexes and not minColumn:
+            #    minColumn = col
+            tmpStr += self.getClmnOidHashDefinesForGivenTable(tableName,col)
+        return tmpStr
+
+
+
+    def getTblColOrIdxDblIndirectionDecls4FnDefnParam(self,tableName,idxOrClmSymbol):
+        symbolDeclAsFuncParameter = ''
+        idxName = idxOrClmSymbol['name']
+        idxType = self.getObjTypeString(idxOrClmSymbol)
+        if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+            #tableDataGetString += ', '
+            symbolDeclAsFuncParameter = """
+@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ **@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_ptr , size_t* @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len_ptr
+"""
+        else:
+            symbolDeclAsFuncParameter = """
+@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr
+"""
+        symbolDeclAsFuncParameter = self.parseColSpecificSubstitutionsAndReturnActualString(symbolDeclAsFuncParameter,tableName,idxOrClmSymbol)
+        return symbolDeclAsFuncParameter
+
+
+
+    def getDeclarationOfTblClmOrIdxAsFunctionDefnParameter4IndexesSetFn(self,tableName,idxOrClmSymbol):
+        symbolDeclAsFuncParameter = ''
+        idxName = idxOrClmSymbol['name']
+        idxType = self.getObjTypeString(idxOrClmSymbol)
+        if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+            symbolDeclAsFuncParameter = """
+@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr , size_t @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len
+"""
+                # Verify if this is the thing for oid
+        else:
+            #symbolDeclAsFuncParameter += ', ' + self.ctypeClasses[idxType] + ' ' + idx['name'] + '_val'
+            symbolDeclAsFuncParameter = """
+@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val
+"""
+
+        symbolDeclAsFuncParameter = self.parseColSpecificSubstitutionsAndReturnActualString(symbolDeclAsFuncParameter,tableName,idxOrClmSymbol)
+        return symbolDeclAsFuncParameter
+
+
+    def getDeclarationOfTblClmOrIdxAsFunctionCallParameter4IndexesSetFn(self,tableName,idxOrClmSymbol):
+        symbolDeclAsFuncParameter = ''
+        idxName = idxOrClmSymbol['name']
+        idxType = self.getObjTypeString(idxOrClmSymbol)
+        if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+            symbolDeclAsFuncParameter = """
+@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr , @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len
+"""
+        else:
+            symbolDeclAsFuncParameter = """
+@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val
+"""
+        symbolDeclAsFuncParameter = self.parseColSpecificSubstitutionsAndReturnActualString(symbolDeclAsFuncParameter,tableName,idxOrClmSymbol)
+        return symbolDeclAsFuncParameter
+
+
+
+    def getDeclarationOfTblClmOrIdxAsFunctionDefnParameter4OvsdbGetFn(self,tableName,idxOrClmSymbol):
+        symbolDeclAsFuncParameter = ''
+        idxName = idxOrClmSymbol['name']
+        idxType = self.getObjTypeString(idxOrClmSymbol)
+        if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+            symbolDeclAsFuncParameter = """ @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr , size_t * @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len
+"""
+                # Verify if this is the thing for oid
+        else:
+            symbolDeclAsFuncParameter = """ @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr
+"""
+
+        symbolDeclAsFuncParameter = self.parseColSpecificSubstitutionsAndReturnActualString(symbolDeclAsFuncParameter,tableName,idxOrClmSymbol)
+        return symbolDeclAsFuncParameter
+
+
+
+    def getDeclarationOfTblClmOrIdxAsFunctionCallParameter4OvsdbGetFn(self,tableName,idxOrClmSymbol):
+        symbolDeclAsFuncParameter = ''
+        idxName = idxOrClmSymbol['name']
+        idxType = self.getObjTypeString(idxOrClmSymbol)
+        if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+            symbolDeclAsFuncParameter = """ @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr , @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len
+"""
+        else:
+            symbolDeclAsFuncParameter = """ @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr
+"""
+        symbolDeclAsFuncParameter = self.parseColSpecificSubstitutionsAndReturnActualString(symbolDeclAsFuncParameter,tableName,idxOrClmSymbol)
+        return symbolDeclAsFuncParameter
+
+
+    def getDeclarationsOfAllIndexColumnsAsFunctionDefinitionParameters4IndexesSetFn(self,tableName):
+        idxDeclarationsList = []
+        indexes = self.getIndexesForTable(tableName)
+        for idx in indexes:
+            idxDeclarationsList.append(self.getDeclarationOfTblClmOrIdxAsFunctionDefnParameter4IndexesSetFn(tableName,idx))
+        idxDeclarations = ', '.join(idxDeclarationsList);
+        return idxDeclarations
+
+    def getDeclarationsOfAllIndxColumnsAsFunctionCallParameters4IndexesSetFn(self,tableName):
+        idxDeclarationsList = []
+        indexes = self.getIndexesForTable(tableName)
+        for idx in indexes:
+            idxDeclarationsList.append(self.getDeclarationOfTblClmOrIdxAsFunctionCallParameter4IndexesSetFn(tableName,idx))
+        idxDeclarations = ', '.join(idxDeclarationsList);
+        return idxDeclarations
+
+    def getSetTblIdxStatementForGivenIdx(self,tableName,tableIndex):
+        idx = tableIndex
+        tmpStr = ''
+        idxType = self.getObjTypeString(idx)
+        idxName = idx['name']
+        if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+            tmpStr = """
+tbl_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len = sizeof(tbl_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@)/sizeof(tbl_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0]);
+if ((NULL == tbl_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@) || (tbl_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len < (@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len))) {
+    snmp_log(LOG_ERR, "not enough space for value (@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr)\\n");
+    return MFD_ERROR;
+}
+tbl_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len = @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len;
+memcpy(tbl_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@, @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr, @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len* sizeof(@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr[0]));
+"""
+        else:
+            tmpStr = """
+tbl_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@ = @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val;
+"""
+        tmpStr = self.parseColSpecificSubstitutionsAndReturnActualString(tmpStr,tableName,tableIndex)
+        return tmpStr
+
+    def getSetTblIdxStatements(self,tableName):
+        indexes = self.getIndexesForTable(tableName)
+        tmpStr = ''
+        for idx in indexes:
+            tmpStr += self.getSetTblIdxStatementForGivenIdx(tableName,idx)
+        return tmpStr
+
+    def getNetSnmpAssertStatements4ColOrIdxDblIndirectionParam(self,tableName,idxOrClmSymbol):
+        idxName = idxOrClmSymbol['name']
+        idxType = self.getObjTypeString(idxOrClmSymbol)
+        tableDataGetString = ''
+        if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+            tableDataGetString = """
+netsnmp_assert( (NULL != @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_ptr) && (NULL != *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_ptr));
+netsnmp_assert(NULL != @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len_ptr);
+"""
+        else:
+            tableDataGetString = """
+netsnmp_assert(NULL != @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr);
+"""
+        tableDataGetString = self.parseColSpecificSubstitutionsAndReturnActualString(tableDataGetString,tableName,idxOrClmSymbol)
+        return tableDataGetString
+
+    def getTblColGetFnBodyForColumnGetFn(self,tableName,colOrIdxSymbol):
+        colName = colOrIdxSymbol['name']
+        idxType = self.getObjTypeString(colOrIdxSymbol)
+        if colOrIdxSymbol in self.getIndexesForTable(tableName):
+            if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                tableDataGetString = """
+    if ((NULL == (*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_ptr)) || ((*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len_ptr) < (rowreq_ctx->tbl_idx.@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len* sizeof(rowreq_ctx->tbl_idx.@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0])))) {
+        (* @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_ptr) = malloc(rowreq_ctx->tbl_idx.@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len* sizeof(rowreq_ctx->tbl_idx.@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0]));
+        if (NULL == (*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_ptr)) {
+            snmp_log(LOG_ERR, "could not allocate memory (rowreq_ctx->tbl_idx.@@SUBSTITUTE_IDX_OR_CLM_NAME@@)\\n");
+            return MFD_ERROR;
+        }
+    }
+    (* @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len_ptr) = rowreq_ctx->tbl_idx.@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len* sizeof(rowreq_ctx->tbl_idx.@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0]);
+    memcpy((*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_ptr), rowreq_ctx->tbl_idx.@@SUBSTITUTE_IDX_OR_CLM_NAME@@, rowreq_ctx->tbl_idx.@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len* sizeof(rowreq_ctx->tbl_idx.@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0]));
+
+    """
+            else:
+                tableDataGetString = """
+    (*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr) = rowreq_ctx->tbl_idx.@@SUBSTITUTE_IDX_OR_CLM_NAME@@;
+    """
+        else:
+            if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                tableDataGetString = """
+    if ((NULL == (*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_ptr)) || ((*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len_ptr) < (rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len* sizeof(rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0])))) {
+        (* @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_ptr) = malloc(rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len* sizeof(rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0]));
+        if (NULL == (*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_ptr)) {
+            snmp_log(LOG_ERR, "could not allocate memory (rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@)\\n");
+            return MFD_ERROR;
+        }
+    }
+    (* @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len_ptr) = rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len* sizeof(rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0]);
+    memcpy((*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_ptr), rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@, rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len* sizeof(rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0]));
+
+    """
+            else:
+                tableDataGetString = """
+    (*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr) = rowreq_ctx->data.@@SUBSTITUTE_IDX_OR_CLM_NAME@@;
+    """
+        tableDataGetString = self.parseColSpecificSubstitutionsAndReturnActualString(tableDataGetString,tableName,colOrIdxSymbol)
+        return tableDataGetString;
+
+    def getColumnGetFnPrototypeForGivenCol(self,tableName,colOrIdxSymbol):
+        colName = colOrIdxSymbol['name']
+        idxType = self.getObjTypeString(colOrIdxSymbol)
+
+        tableDataHeaderString ="""
+int @@SUBSTITUTE_IDX_OR_CLM_NAME@@_get(@@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx *rowreq_ctx, @@SUBSTITUTE_CLMN_DOUBLE_INDIRECTION_DECL_4_CLM_GET_FUNC_DEFN_PARAM@@ )
+"""
+        tableDataHeaderString = self.parseColSpecificSubstitutionsAndReturnActualString(tableDataHeaderString,tableName,colOrIdxSymbol)
+        tableDataHeaderString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableDataHeaderString,tableName)
+        return tableDataHeaderString
+
+    def generateColumnGetFnDeclarationForGivenCol(self,tableName,colOrIdxSymbol):
+        colName = colOrIdxSymbol['name']
+        idxType = self.getObjTypeString(colOrIdxSymbol)
+        tableDataHeaderString ="""
+@@SUBSTITTUTE_COL_GET_FN_PROTOTYPE@@ ;
+"""
+        tableDataHeaderString = self.parseColSpecificSubstitutionsAndReturnActualString(tableDataHeaderString,tableName,colOrIdxSymbol)
+        return tableDataHeaderString
+
+
+    def generateColumnGetFnsForGivenCol(self,tableName,colOrIdxSymbol):
+        colName = colOrIdxSymbol['name']
+        idxType = self.getObjTypeString(colOrIdxSymbol)
+        tableDataGetString ="""
+@@SUBSTITTUTE_COL_GET_FN_PROTOTYPE@@ {
+
+    @@SUBSTITUTE_NETSNMP_ASSERT_STATEMENTS_4_CLM_DECL_PARAM@@
+
+    DEBUGMSGTL(("verbose:@@SUBSTITUTE_TABLE_NAME@@:@@SUBSTITUTE_IDX_OR_CLM_NAME@@_get","called\\n"));
+    netsnmp_assert(NULL != rowreq_ctx);
+
+    @@SUBSTITUTE_COL_GET_FN_BODY@@
+
+    return MFD_SUCCESS;
+}
+
+"""
+        tableDataGetString = self.parseColSpecificSubstitutionsAndReturnActualString(tableDataGetString,tableName,colOrIdxSymbol)
+        tableDataGetString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableDataGetString,tableName)
+        return tableDataGetString
+
+
+    def getColumnGetFnDefnsForAllTableCols(self,tableName):
+        tmpStr = ''
+        indexes = self.getIndexesForTable(tableName)
+        for idx in indexes:
+            if idx['maxaccess'] == 'notaccessible':
+                continue
+            tmpStr += self.generateColumnGetFnsForGivenCol(tableName,idx)
+        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+            if col['name'] in [idx['name'] for idx in indexes] or col['maxaccess'] == 'notaccessible':
+                continue
+            tmpStr += self.generateColumnGetFnsForGivenCol(tableName,col)
+        return tmpStr
+
+    def getColumnGetFnDeclarationForAllTableCols(self,tableName):
+        indexes = self.getIndexesForTable(tableName)
+        tmpStr = ''
+        for idx in indexes:
+            if idx['maxaccess'] == 'notaccessible':
+                continue
+            tmpStr += self.generateColumnGetFnDeclarationForGivenCol(tableName,idx)
+        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+            if col['name'] in [idx['name'] for idx in indexes] or col['maxaccess'] == 'notaccessible':
+                continue
+            tmpStr += self.generateColumnGetFnDeclarationForGivenCol(tableName,col)
+        return tmpStr
+
+    def substituteTableName(self,tableName):
+        # handle '@@SUBSTITUTE_TABLE_NAME@@' by replacing with the 'tableName' parameter
+        return tableName
+
+    def substituteTableNameCaps(self,tableName):
+        # handle '@@SUBSTITUTE_TABLE_NAME_UPPER@@' by replacing with the 'tableName.upper()' parameter
+        return tableName.upper()
+
+    def substituteColName(self,tableName,colOrIdxSymbol):
+        return colOrIdxSymbol['name']
+
+    def substituteColNameCaps(self,tableName,colOrIdxSymbol):
+        return colOrIdxSymbol['name'].upper()
+
+    def constructHashDefineConstForEnum(self,tableName,idxOrColSymbol,enumName,enumVal):
+        enumHashDefine = """
+#define D_@@SUBSTITUTE_IDX_OR_CLM_NAME@@_@@SUBSTITUTE_ENUM_NAME@@ @@SUBSTITUTE_ENUM_VAL@@
+"""
+        enumHashDefine = enumHashDefine.replace('@@SUBSTITUTE_ENUM_NAME@@',enumName)
+        enumHashDefine = enumHashDefine.replace('@@SUBSTITUTE_ENUM_VAL@@',str(enumName))
+        enumHashDefine = self.parseColSpecificSubstitutionsAndReturnActualString(enumHashDefine,tableName,idxOrColSymbol)
+        return enumHashDefine
+
+    def getHashDefinesOfEnumsFromGivenCol(self,tableName,colOrIdxSymbol):
+        tableEnumHeaderString = ''
+        if colOrIdxSymbol['name'] in self.enumSymbols:
+            for x in self.enumSymbols[colOrIdxSymbol['name']]:
+                name, val = x
+                tableEnumsHeaderString += self.constructHashDefineConstForEnum(tableName,idx,name,val)
+        return tableEnumHeaderString;
+
+    def getHashDefineOfAllEnumsOfTable(self,tableName):
+        indexes = self.getIndexesForTable(tableName)
+        hashDefines = ''
+        for idx in indexes:
+            hashDefines += self.getHashDefinesOfEnumsFromGivenCol(tableName,idx)
+        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+            hashDefines += self.getHashDefinesOfEnumsFromGivenCol(tableName,idx)
+        return hashDefines
+
+
+    def getIdxOrClmTypeEquivalentInNET_SNMP(self,tableName,colOrIdxSym):
+        return self.netsnmpTypes[self.getObjTypeString(colOrIdxSym)]
+
+
+    def getInternalSnmpGetLogicForGivenColOrIdx(self,tableName,idxOrCllmSymbol):
+        tableInterfaceString = ''
+        if idxOrCllmSymbol['maxaccess'] == 'notaccessible':
+            return tableInterfaceString
+        idxType = self.getObjTypeString(idxOrCllmSymbol)
+        if idxType == 'Bits':
+            tableInterfaceString = """
+                case COLUMN_@@SUBSTITUTE_IDX_OR_CLM_NAME_UPPER@@: {
+                    u_long mask = (u_long)0xff << ((sizeof(char)-1)*8);
+                    int idx = 0;
+                    var->type =  ASN_OCTET_STR;
+                    rc = @@SUBSTITUTE_IDX_OR_CLM_NAME@@_get(rowreq_ctx, (u_long *)var->val.string);
+                    var->val_len = 0;
+                    while( 0 != mask) {
+                        ++idx;
+                        if(*((u_long*)var->val.string)&mask)
+                            var->val_len = idx;
+                        mask = mask >> 8;
+                    }
+                }
+               break;
+"""
+        elif idxType == 'OctetString':
+            tableInterfaceString = """
+                case COLUMN_@@SUBSTITUTE_IDX_OR_CLM_NAME_UPPER@@: {
+                    var->type = @@SUBSTITUTE_NET_SNMP_TYPE_FOR_GIVEN_IDX_OR_COL@@;
+                    rc = @@SUBSTITUTE_IDX_OR_CLM_NAME@@_get(rowreq_ctx, (char **)&var->val.string, &var->val_len);
+                }
+                break;
+"""
+        elif idxType == 'ObjectIdentifier':
+            tableInterfaceString = """
+                case COLUMN_@@SUBSTITUTE_IDX_OR_CLM_NAME_UPPER@@:{
+                    var->type = @@SUBSTITUTE_NET_SNMP_TYPE_FOR_GIVEN_IDX_OR_COL@@;
+                    rc = @@SUBSTITUTE_IDX_OR_CLM_NAME@@_get(rowreq_ctx, (oid **)&var->val.string, &var->val_len);
+                }
+                break;
+"""
+        else:
+            tableInterfaceString = """
+                case COLUMN_@@SUBSTITUTE_IDX_OR_CLM_NAME_UPPER@@:{
+                    var->type = @@SUBSTITUTE_NET_SNMP_TYPE_FOR_GIVEN_IDX_OR_COL@@;
+                    var->val_len = sizeof(@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@);
+                    rc = @@SUBSTITUTE_IDX_OR_CLM_NAME@@_get(rowreq_ctx, (@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@*)var->val.string);
+                }
+                break;
+"""
+        tableInterfaceString = self.parseColSpecificSubstitutionsAndReturnActualString(tableInterfaceString,tableName,idxOrCllmSymbol)
+        return tableInterfaceString;
+
+
+    ##@@SUBSTITUTE_NET_SNMP_INTERNAL_GET_LOGIC_FOR_ALL_IDX_OR_COL@@
+    def getInternalSnmpGetLogicForAllIdxOrClmOfTable(self,tableName):
+        tmpStr = ''
+        indexes = self.getIndexesForTable(tableName)
+        for idx in indexes:
+            tmpStr += self.getInternalSnmpGetLogicForGivenColOrIdx(tableName,idx)
+
+        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+            if col['name'] in self.tableRows[self.tables[tableName]['row']]['index']:
+                continue
+            tmpStr += self.getInternalSnmpGetLogicForGivenColOrIdx(tableName,col)
+
+        return tmpStr
+
+
+    #dict {k,v}, k - substitution string, v - function to be called
+    ColSpecificSubstitutionStringFnsMap = {
+##ONLY COLUMN SPECIFIC SUBSTITUTIONS -- Takes col-symbol as extra parameter
+'@@SUBSTITUTE_IDX_OR_CLM_NAME@@' : substituteColName,
+'@@SUBSTITUTE_IDX_OR_CLM_NAME_UPPER@@': substituteColNameCaps,
+'@@COLUMN_OR_IDX_SIZE@@' : getIdxOrClmSize,
+'@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@':getIdxOrColTypeEquivalentInC,
+'@@SUBSTITUTE_COLUMN_OID@@':getIdxOrClmOid,
+'@@SUBSTITUTE_CLMN_DOUBLE_INDIRECTION_DECL_4_CLM_GET_FUNC_DEFN_PARAM@@' : getTblColOrIdxDblIndirectionDecls4FnDefnParam,
+'@@SUBSTITTUTE_COL_GET_FN_PROTOTYPE@@' : getColumnGetFnPrototypeForGivenCol,
+'@@SUBSTITUTE_NETSNMP_ASSERT_STATEMENTS_4_CLM_DECL_PARAM@@' : getNetSnmpAssertStatements4ColOrIdxDblIndirectionParam,
+'@@SUBSTITUTE_COL_GET_FN_BODY@@' : getTblColGetFnBodyForColumnGetFn,
+'@@SUBSTITUTE_NET_SNMP_TYPE_FOR_GIVEN_IDX_OR_COL@@' : getIdxOrClmTypeEquivalentInNET_SNMP
+
+   }
+
+    #dict {k,v}, k - substitution string, v - function to be called
+    TableSpecificSubstitutionStringFnsMap = {
+##ONLY TABLE SPECIFIC SUBSTITUTIONS
+'@@SUBSTITUTE_TABLE_NAME@@':substituteTableName,
+'@@SUBSTITUTE_TABLE_NAME_UPPER@@':substituteTableNameCaps,
+'@@SUBSTITUTE_GET_ALL_NON_IDX_COL_DECLNS_4_TABLE@@' : getAllNonIdxClmDeclarationsForGivenTable,
+'@@SUBSTITUTE_GET_ALL_IDX_COL_DECLNS_4_TABLE@@' : getAllIdxClmDeclarationsForGivenTable,
+'@@SUBSTITUTE_TABLE_OID@@' : getOidForGivenTable,
+'@@SUBSTITUTE_TABLE_MIN_COL_NAME_UPPER@@' : getMinNonIdxColumnForGivenTable,
+'@@SUBSTITUTE_TABLE_MAX_COL_NAME_UPPER@@' : getMaxNonIdxColumnForGivenTable,
+'@@SUBSTITUTE_GET_HASH_DEFINE_OID_OF_ALL_COL_4_TABLE@@' : getHashDefinesOfAllColumnOidsForGivenTable,
+'@@SUBSTITUTE_GET_ALL_IDX_COL_DECLNS_AS_PARAMS_4_INDEXES_SET_FUNC_DEFNN@@' : getDeclarationsOfAllIndexColumnsAsFunctionDefinitionParameters4IndexesSetFn,
+'@@SUBSTITUTE_GET_ALL_IDX_COL_DECLNS_AS_FUNC_CALL_PARAMS_4_INDEXES_SET_FN@@': getDeclarationsOfAllIndxColumnsAsFunctionCallParameters4IndexesSetFn,
+'@@SUBSTITUTE_SET_TBL_INDEXES_FOR_TABLE@@' : getSetTblIdxStatements,
+'@@SUBSTITUTE_GENERATE_COLUMN_GET_FUNCTION_DEFNS_FOR_ALL_COLUMNS_OF_TABLE@@' : getColumnGetFnDefnsForAllTableCols,
+'@@SUBSTITUTE_GENERATE_COLUMN_GET_FUNCTION_DECLARATION_FOR_ALL_COLUMNS_OF_TABLE@@':getColumnGetFnDeclarationForAllTableCols,
+'@@SUBSTITUTE_HASH_DEFINE_OF_ALL_ENUMS_OF_GIVEN_TABLE@@':getHashDefineOfAllEnumsOfTable,
+'@@SUBSTITUTE_OVSDB_ROW_STRINGS_FOR_TABLE@@' : getOvsdbRowsStringForTable,
+'@@SUBSTITUTE_GET_ALL_LOCAL_STRINGS_FOR_TABLE@@' : getLocalsStringForTable,
+'@@SUBSTITUTE_GET_FIRST_INSTANCE_STRINGS_FOR_TABLE@@' : getFirstIntanceStringForTable,
+'@@SUBSTITUTE_GET_FOR_LOOP_STR_FOR_TABLE@@' : getForLoopStringForTable,
+'@@SUBSTITUTE_TABLE_SKIP_FN_CALL@@' : getTableSkipFnCall,
+'@@SUBSTITUTE_NET_SNMP_INTERNAL_GET_LOGIC_FOR_ALL_IDX_OR_COL@@': getInternalSnmpGetLogicForAllIdxOrClmOfTable
+
+    }
+
+    def parseColSpecificGivenSubstitutionsAndReturnActualString(self,actualStringToProcess,strToBeReplaced,tableName,idxOrColSymbol):
+        if isinstance(strToBeReplaced,str):
+            foundIndex = -1
+            foundIndex = actualStringToProcess.find(strToBeReplaced)
+            if foundIndex >= 0:
+                actualStringToProcess = actualStringToProcess.replace(strToBeReplaced,self.ColSpecificSubstitutionStringFnsMap[strToBeReplaced](self,tableName,idxOrColSymbol))
+        elif isinstance(strToBeReplaced,list):
+            for replStr in strToBeReplaced:
+                foundIndex = -1
+                foundIndex = actualStringToProcess.find(replStr)
+                if foundIndex >= 0:
+                    actualStringToProcess = actualStringToProcess.replace(replStr,self.ColSpecificSubstitutionStringFnsMap[replStr](self,tableName,idxOrColSymbol))
+        return actualStringToProcess
+
+    def parseColSpecificSubstitutionsAndReturnActualString(self,actualStringToProcess,tableName,idxOrColSymbol):
+        for handleStr in self.ColSpecificSubstitutionStringFnsMap.keys():
+            actualStringToProcess = self.parseColSpecificGivenSubstitutionsAndReturnActualString(actualStringToProcess,handleStr,tableName,idxOrColSymbol)
+        return actualStringToProcess
+
+    def parseTableSpecificGivenSubstitutionsAndReturnActualString(self,actualStringToProcess,strToBeReplaced,tableName):
+        if isinstance(strToBeReplaced,str):
+            foundIndex = -1
+            foundIndex = actualStringToProcess.find(strToBeReplaced)
+            if foundIndex >= 0:
+                actualStringToProcess = actualStringToProcess.replace(strToBeReplaced,self.TableSpecificSubstitutionStringFnsMap[strToBeReplaced](self,tableName))
+        elif isinstance(strToBeReplaced,list):
+            for replStr in strToBeReplaced:
+                foundIndex = -1
+                foundIndex = actualStringToProcess.find(replStr)
+                if foundIndex >= 0:
+                    actualStringToProcess = actualStringToProcess.replace(replStr,self.TableSpecificSubstitutionStringFnsMap[replStr](self,tableName))
+        return actualStringToProcess
+
+    def parseTableSpecificSubstitutionsAndReturnActualString(self,actualStringToProcess,tableName):
+
+        for handleStr in self.TableSpecificSubstitutionStringFnsMap.keys():
+            actualStringToProcess = self.parseTableSpecificGivenSubstitutionsAndReturnActualString(actualStringToProcess,handleStr,tableName)
+        return actualStringToProcess;
+
+
+    def generateTableNameDotCSourceFile(self,tableName):
+        tableFileString = self.loadNetSnmpTemplateCodeFromFile('tableName.c.template')
+        tableFileString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableFileString,tableName)
+        self.fileWrite(fileName=tableName + '.c',data=tableFileString)
+        tableFileString = ''
+    ##end of function
+
+
+
+    def generateTableNameDotHFile(self,tableName):
+        tableFileHeaderString = self.loadNetSnmpTemplateCodeFromFile('tableName.h.template')
+        tableFileHeaderString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableFileHeaderString,tableName)
+        self.fileWrite(fileName= tableName + '.h',data=tableFileHeaderString)
+        tableFileHeaderString  = ''
+    #end of generate function for tableName.h file
+
+
+
+    def generateTableNameOidsDotHFile(self,tableName):
+        tableOidsHeaderString = self.loadNetSnmpTemplateCodeFromFile('tableName_oids.h.template')
+        tableOidsHeaderString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableOidsHeaderString,tableName)
+        self.fileWrite(fileName=tableName + '_oids.h',data=tableOidsHeaderString)
+        tableOidsHeaderString = ''
+
+
+    def generateTableDataGetDotCFile(self,tableName):
+        tableDataGetString = self.loadNetSnmpTemplateCodeFromFile('tableName_data_get.c.template')
+        tableDataGetString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableDataGetString,tableName)
+        self.fileWrite(fileName=tableName + '_data_get.c',data=tableDataGetString)
+        tableDataGetString = ''
+
+
+    def generateTableDataGetDotHFile(self,tableName):
+        tableDataGetHeaderString = self.loadNetSnmpTemplateCodeFromFile('tableName_data_get.h.template')
+        tableDataGetHeaderString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableDataGetHeaderString,tableName)
+        self.fileWrite(fileName=tableName + '_data_get.h',data=tableDataGetHeaderString)
+        tableDataGetHeaderString = ''
+
+
+    def generateTableDataSetDotCFile(self,tableName):
+        tableDataSetString = self.loadNetSnmpTemplateCodeFromFile('tableName_data_set.c.template')
+        tableDataSetString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableDataSetString,tableName)
+        self.fileWrite(fileName=tableName + '_data_set.c',data=tableDataSetString)
+        tableDataSetString = ''
+
+
+    def generateTableDataSetDotHFile(self,tableName):
+        tableDataSetHeaderString = self.loadNetSnmpTemplateCodeFromFile('tableName_data_set.h.template')
+        tableDataSetHeaderString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableDataSetHeaderString,tableName)
+        self.fileWrite(fileName=tableName + '_data_set.h',data=tableDataSetHeaderString)
+        tableDataSetHeaderString = ''
+
+
+    def generateTableInterfaceDotHFile(self,tableName):
+        tableInterfaceHeaderString = self.loadNetSnmpTemplateCodeFromFile('tableName_interface.h.template')
+        tableInterfaceHeaderString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableInterfaceHeaderString,tableName)
+        self.fileWrite(fileName=tableName + '_interface.h',data=tableInterfaceHeaderString)
+        tableInterfaceHeaderString = ''
+
+
+    def generateTableEnumsDotHFile(self,tableName):
+        tableEnumsHeaderString = self.loadNetSnmpTemplateCodeFromFile('tableName_enums.h.template')
+        tableEnumsHeaderString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableEnumsHeaderString,tableName)
+        self.fileWrite(fileName=tableName + '_enums.h',data=tableEnumsHeaderString)
+        tableEnumsHeaderString = ''
+
+
+    def generateTableDataAccessDotCFile(self,moduleName,tableName):
+        tableDataAccessString = self.loadNetSnmpTemplateCodeFromFile('tableName_data_access.c.template')
+        tableDataAccessString = tableDataAccessString.replace('@@SUBSTITUTE_MODULE_NAME@@',moduleName)
+        tableDataAccessString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableDataAccessString,tableName)
+        self.fileWrite(fileName=tableName + '_data_access.c',data=tableDataAccessString)
+        tableDataAccessString = ''
+
+
+    def generateTableDataAccessDotHFile(self,tableName):
+        tableDataAccessHeaderString  = self.loadNetSnmpTemplateCodeFromFile('tableName_data_access.h.template')
+        timeout = '30'
+        if self.jsonData[tableName]['CacheTimeout']:
+            timeout = str(self.jsonData[tableName]['CacheTimeout'])
+        tableDataAccessHeaderString = tableDataAccessHeaderString.replace('@@TIMEOUT_VAL@@',timeout)
+        tableDataAccessHeaderString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableDataAccessHeaderString,tableName)
+        self.fileWrite(fileName=tableName + '_data_access.h',data=tableDataAccessHeaderString)
+        tableDataAccessHeaderString = ''
+
+
+    def generateTableInterfaceDotCFile(self,tableName):
+        tableInterfaceString = self.loadNetSnmpTemplateCodeFromFile('tableName_interface.c.template')
+        #@@SUBSTITUTE_NET_SNMP_TYPES_OF_ALL_IDX@@
+        indexes = self.getIndexesForTable(tableName)
+
+        netSnmpTypesOfAllIdx = ''
+        for idx in indexes:
+            netSnmpTypesOfAllIdx += ', ' + self.netsnmpTypes[self.getObjTypeString(idx)]
+        tableInterfaceString = tableInterfaceString.replace('@@SUBSTITUTE_NET_SNMP_TYPES_OF_ALL_IDX@@',netSnmpTypesOfAllIdx)
+
+        _tmp_var_list = ''
+
+        for idx in indexes:
+            _tmp_var_list += """
+                        netsnmp_variable_list var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@;
+"""
+            _tmp_var_list = _tmp_var_list.replace('@@SUBSTITUTE_IDX_OR_CLM_NAME@@',idx['name'])
+
+
+        _tmp_var_list_initialization = ''
+        for index, idx in enumerate(indexes):
+            _tmp_var_list_initialization += """
+                memset(&var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@, 0x00, sizeof(var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@));
+                var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@.type = @@SUBSTITUTE_NET_SNMP_TYPE_FOR_GIVEN_IDX_OR_COL@@;
+                var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@.next_variable = @@SUBSTITUTE_PTR_TO_NXT_VAR@@;
+
+"""
+            _nxt_var_list = ''
+            if index is not len(indexes) - 1:
+                 _nxt_var_list = '&var_' + indexes[index + 1]['name']
+            else:
+                _nxt_var_list = 'NULL'
+
+            #_tmp_var_list_initialization = self.parseColSpecificGivenSubstitutionsAndReturnActualString(_tmp_var_list_initialization,'@@SUBSTITUTE_IDX_OR_CLM_NAME@@',idx)
+            #_tmp_var_list_initialization = self.parseColSpecificGivenSubstitutionsAndReturnActualString(_tmp_var_list_initialization,'@@SUBSTITUTE_NET_SNMP_TYPE_FOR_GIVEN_IDX_OR_COL@@',idx)
+            _tmp_var_list_initialization = self.parseColSpecificGivenSubstitutionsAndReturnActualString(_tmp_var_list_initialization,
+                                                                                                        ['@@SUBSTITUTE_IDX_OR_CLM_NAME@@','@@SUBSTITUTE_NET_SNMP_TYPE_FOR_GIVEN_IDX_OR_COL@@'],
+                                                                                                        tableName,idx)
+            _tmp_var_list_initialization = _tmp_var_list_initialization.replace('@@SUBSTITUTE_PTR_TO_NXT_VAR@@',_nxt_var_list)
+
+
+        snmp_set_var_value = ''
+        for idx in indexes:
+            idxType = self.getObjTypeString(idx)
+            if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                snmp_set_var_value += """
+snmp_set_var_value(&var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@,&mib_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@,mib_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len * sizeof(mib_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0]));
+"""
+            else:
+                snmp_set_var_value += """
+snmp_set_var_value(&var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@, &mib_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@, sizeof(mib_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@));
+"""
+            snmp_set_var_value = snmp_set_var_value.replace('@@SUBSTITUTE_IDX_OR_CLM_NAME@@',idx['name'])
+
+        mib_idx_ptr_val = ''
+        for idx in indexes:
+            idxType = self.getObjTypeString(idx)
+            if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+                mib_idx_ptr_val += """
+            if (var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@.val_len > sizeof(mib_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@)) {
+                err = SNMP_ERR_GENERR;
+            }
+            else {
+                    memcpy(mib_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@, var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@.val.string, var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@.val_len);
+                    mib_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len = var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@.val_len/ sizeof(mib_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@[0]);
+            }
+"""
+            else:
+                mib_idx_ptr_val += """
+            mib_idx->@@SUBSTITUTE_IDX_OR_CLM_NAME@@ = *((@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@*)var_@@SUBSTITUTE_IDX_OR_CLM_NAME@@.val.string);
+"""
+            mib_idx_ptr_val = self.parseColSpecificGivenSubstitutionsAndReturnActualString(mib_idx_ptr_val,
+                                                                                            ['@@SUBSTITUTE_IDX_OR_CLM_NAME@@','@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@'],
+                                                                                            tableName,idx)
+
+
+        tableInterfaceString = tableInterfaceString.replace('@@SUBSTITUTE_UPDATE_MIB_IDX_FOR_ALL_INDEXES@@',mib_idx_ptr_val)
+        tableInterfaceString = tableInterfaceString.replace('@@SUBSTITUTE_SNMP_VAR_VALUE_FOR_ALL_INDEXES@@',snmp_set_var_value)
+        tableInterfaceString = tableInterfaceString.replace('@@SUBSTITUTE_NET_SNMP_VARIABLE_LIST_FOR_ALL_INDEXES@@',_tmp_var_list)
+        tableInterfaceString = tableInterfaceString.replace('@@SUBSTITUTE_INITIALIZE_NET_SNMP_VARIABLE_LIST_OF_INDEXES@@',_tmp_var_list_initialization)
+        tableInterfaceString = tableInterfaceString.replace('@@SUBSTITUTE_FIRST_IDX_NAME@@',indexes[0]['name'])
+
+        #tableInterfaceString = self.parseTableSpecificGivenSubstitutionAndReturnActualString(tableInterfaceString,'@@SUBSTITUTE_NET_SNMP_INTERNAL_GET_LOGIC_FOR_ALL_IDX_OR_COL@@',tableName)
+        #tableInterfaceString = self.parseTableSpecificGivenSubstitutionAndReturnActualString(tableInterfaceString,'@@SUBSTITUTE_TABLE_NAME@@',tableName)
+        #tableInterfaceString = self.parseTableSpecificGivenSubstitutionAndReturnActualString(tableInterfaceString,'@@SUBSTITUTE_TABLE_NAME_UPPER@@',tableName)
+        #All the above are covered within the foll fun..
+        tableInterfaceString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableInterfaceString,tableName)
+
+        self.fileWrite(fileName=tableName + '_interface.c',data=tableInterfaceString)
+       #templateJsonObject = ''
+        tableInterfaceString = ''
+
+
+    def getOvsdbGetFnDeclnsForGivenClmOrIdx(self,tableName,idxOrClmSymbol,rootDbTable,useSchemaSpecifiedCardinality,tmpAppendConditionFlagParameterName,tmpAppendConditionTypeFlagParameterDefn,tmpAppendConditionFlagParameterVal):
+        idx = idxOrClmSymbol
+        appendConditionFlagParameterName = tmpAppendConditionFlagParameterName
+        appendConditionTypeFlagParameterDefn = tmpAppendConditionTypeFlagParameterDefn # NOTE : must be last parameter always
+        appendConditionFlagParameterVal = tmpAppendConditionFlagParameterVal
+        if useSchemaSpecifiedCardinality:
+            if self.mibObjectParticipatesInMultipleCardinality(tableName,idxOrClmSymbol):
+                appendConditionFlagParameterName = tmpAppendConditionFlagParameterName
+                appendConditionTypeFlagParameterDefn = tmpAppendConditionTypeFlagParameterDefn # NOTE : must be last parameter always
+                appendConditionFlagParameterVal = tmpAppendConditionFlagParameterVal
+            else:
+                appendConditionTypeFlagParameterDefn = ''
+                appendConditionFlagParameterName = ''
+                appendConditionFlagParameterVal = ''
+
+        tableOvsdbGetHeaderString = ''
+        dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,idxOrClmSymbol) # self.jsonData[tableName]['Indexes'][idx['name']]
+        idxTable = dbIdx['OvsTable']
+        idxType = self.getObjTypeString(idxOrClmSymbol)
+        if not idxTable:
+            tableOvsdbGetHeaderString = """
+void ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(struct ovsdb_idl *idl,
+                                              const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row, 
+                                              @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@  @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@);
+"""
+
+        elif idxTable != rootDbTable:
+            tableOvsdbGetHeaderString = """
+void ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(struct ovsdb_idl *idl,
+                                              const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row, 
+                                              const struct ovsrec_@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@ *@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row, 
+                                              @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@  @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@);
+"""
+
+        else:
+            tableOvsdbGetHeaderString = """
+void ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(struct ovsdb_idl *idl,
+                                              const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row, 
+                                              @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@  @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@);
+"""
+
+        tableOvsdbGetHeaderString = tableOvsdbGetHeaderString.replace('@@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@',
+                                                                self.getDeclarationOfTblClmOrIdxAsFunctionDefnParameter4OvsdbGetFn(tableName,idx))
+        tableOvsdbGetHeaderString = tableOvsdbGetHeaderString.replace('@@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@',appendConditionTypeFlagParameterDefn)
+        tableOvsdbGetHeaderString = tableOvsdbGetHeaderString.replace('@@SUBSTITUTE_IDX_OR_CLM_NAME@@',idx['name'])
+        tableOvsdbGetHeaderString = tableOvsdbGetHeaderString.replace('@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@',rootDbTable)
+        if idxTable:
+            tableOvsdbGetHeaderString = tableOvsdbGetHeaderString.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+
+        return tableOvsdbGetHeaderString;
+
+
+
+    def getOvsdbGetFnDeclnsForAllIdxAndCols(self,tableName):
+    #@@SUBSTITUTE_OVSDB_GET_FN_DECL_FOR_ALL_IDX_AND_COL@@
+        indexes = self.getIndexesForTable(tableName)
+        tableOvsdbGetHeaderString = ''
+        tmpAppendConditionTypeFlagParameterDefn = ''
+        tmpAppendConditionFlagParameterName = ''
+        tmpAppendConditionFlagParameterVal = ''
+        useSchemaSpecifiedCardinality = self.doesTableSupportMultipleCardinality(tableName)
+        rootDbTable = self.jsonData[tableName]['RootOvsTable']
+        if useSchemaSpecifiedCardinality:
+            #tmpAppendConditionFlagParameterName = 'conditional_string_type'
+            #tmpAppendConditionTypeFlagParameterDefn = ', const char *' + tmpAppendConditionFlagParameterName # NOTE : must be last parameter always
+            #tmpAppendConditionFlagParameterVal = ', ' + tmpAppendConditionFlagParameterName
+            tmpAppendConditionFlagParameterName = 'conditional_enum_type'
+            tmpAppendConditionTypeFlagParameterDefn = ', int ' + tmpAppendConditionFlagParameterName # NOTE : must be last parameter always
+            tmpAppendConditionFlagParameterVal = ', ' + tmpAppendConditionFlagParameterName
+        else:
+            if(self.tables[tableName]['supportsBothIpv4Ipv6']):
+                tmpAppendConditionFlagParameterName = 'is_for_ip_req_type'
+                tmpAppendConditionTypeFlagParameterDefn = ', int ' + tmpAppendConditionFlagParameterName # NOTE : must be last parameter always
+                tmpAppendConditionFlagParameterVal = ', ' + tmpAppendConditionFlagParameterName
+
+        for idx in indexes:
+            tableOvsdbGetHeaderString += self.getOvsdbGetFnDeclnsForGivenClmOrIdx(tableName,idx,rootDbTable,useSchemaSpecifiedCardinality,tmpAppendConditionFlagParameterName,tmpAppendConditionTypeFlagParameterDefn,tmpAppendConditionFlagParameterVal)
+
+        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+            if col['name'] in [idx['name'] for idx in indexes]:
+                continue
+            tableOvsdbGetHeaderString += self.getOvsdbGetFnDeclnsForGivenClmOrIdx(tableName,col,rootDbTable,useSchemaSpecifiedCardinality,tmpAppendConditionFlagParameterName,tmpAppendConditionTypeFlagParameterDefn,tmpAppendConditionFlagParameterVal)
+
+        return tableOvsdbGetHeaderString
+
+
+    def generateTableNameOvsdbGetDotHFile(self,tableName):
+
+        tableOvsdbGetHeaderString = self.loadNetSnmpTemplateCodeFromFile('tableName_ovsdb_get.h.template')
+        tableOvsdbGetHeaderString = tableOvsdbGetHeaderString.replace('@@SUBSTITUTE_OVSDB_GET_FN_DECL_FOR_ALL_IDX_AND_COL@@',self.getOvsdbGetFnDeclnsForAllIdxAndCols(tableName))
+        tableOvsdbGetHeaderString = self.parseTableSpecificSubstitutionsAndReturnActualString(tableOvsdbGetHeaderString ,tableName)
+        self.fileWrite(fileName=tableName + '_ovsdb_get.h',data=tableOvsdbGetHeaderString)
+        tableOvsdbGetHeaderString = ''
+
+
+
+    def addCustomFnToCustomHeader(self,tableName,idxOrClmSymbol,dbIdx,rootDbTable,idxTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterName,alsoDefineFn=False):
+        idx = idxOrClmSymbol
+        if dbIdx['CustomFunction']:
+            if not idxTable:
+                tmpFnPrototype = """
+void @@SUBSTITUTE_CUSTOM_FN_NAME@@(struct ovsdb_idl *idl,
+                            const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row, 
+                            @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@ )
+"""
+            elif idxTable != rootDbTable:
+                tmpFnPrototype = """
+void @@SUBSTITUTE_CUSTOM_FN_NAME@@(struct ovsdb_idl *idl,
+                            const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row,
+                            const struct ovsrec_@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@ *@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row,
+                            @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@ )
+"""
+            else:
+                tmpFnPrototype = """
+void @@SUBSTITUTE_CUSTOM_FN_NAME@@(struct ovsdb_idl *idl,
+                            const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row, 
+                            @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@ )
+"""
+
+            tmpFnPrototype = tmpFnPrototype.replace('@@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@',
+                                                                    self.getDeclarationOfTblClmOrIdxAsFunctionDefnParameter4OvsdbGetFn(tableName,idx))
+            tmpFnPrototype = tmpFnPrototype.replace('@@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@',appendConditionTypeFlagParameterDefn)
+            tmpFnPrototype = tmpFnPrototype.replace('@@SUBSTITUTE_CUSTOM_FN_NAME@@',dbIdx['CustomFunction'])
+            tmpFnPrototype = tmpFnPrototype.replace('@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@',rootDbTable)
+            if idxTable:
+                tmpFnPrototype = tmpFnPrototype.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+
+            self.customFileHeaderString += tmpFnPrototype  + ';\n\n'
+            useSchemaSpecifiedCardinality = self.doesTableSupportMultipleCardinality(tableName)
+            if alsoDefineFn:
+                if useSchemaSpecifiedCardinality and self.mibObjectParticipatesInMultipleCardinality(tableName,idx):
+                    self.customFileString += self.getCustomFnDefinitions(fnPrototype = tmpFnPrototype,tableName=tableName,idxOrColSymbol=idx,appendConditionFlagParameterName=appendConditionFlagParameterName)
+        return
+
+
+    #@@SUBSTITUTE_FN_BODY_4_OVS_TBL_NOT_SPECIFIED@@
+    def getOvsdbGetFnBodoy4NotIdxTbl(self,tableName,idxOrClmSymbol,dbIdx,idxType,idxTable,rootDbTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterVal,appendConditionFlagParameterName):
+        idx = idxOrClmSymbol
+        fnBody = ''
+        if dbIdx['CustomFunction']:
+            fnBody = """
+@@SUBSTITUTE_CUSTOM_FN_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row, 
+                            @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_CALL@@ @@SUBSTITUTE_COND_FLAG_PARAM_VAL@@);
+"""
+
+            fnBody = fnBody.replace('@@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_CALL@@',
+                                                                    self.getDeclarationOfTblClmOrIdxAsFunctionCallParameter4OvsdbGetFn(tableName,idx))
+            fnBody = fnBody.replace('@@SUBSTITUTE_COND_FLAG_PARAM_VAL@@',appendConditionFlagParameterVal)
+            fnBody = fnBody.replace('@@SUBSTITUTE_CUSTOM_FN_NAME@@',dbIdx['CustomFunction'])
+            fnBody = fnBody.replace('@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@',rootDbTable)
+            if idxTable:
+                fnBody = fnBody.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+
+            self.addCustomFnToCustomHeader(tableName,idx,dbIdx,rootDbTable,idxTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterName)
+
+        else:
+            if idxType == 'OctetString':
+                #<Ph> check if it is '\\0' or '\0'
+                fnBody = """
+    *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = '\\0';
+    *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len = 0;
+"""
+            elif idxType == 'ObjectIdentifier':
+                fnBody = """
+    *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (oid)NULL;
+    *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len = 0;
+"""
+            else:
+                fnBody = """
+    *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)NULL;
+"""
+        fnBody = self.parseColSpecificSubstitutionsAndReturnActualString(fnBody,tableName,idx)
+
+        return fnBody
+
+
+
+    def getCommonOvsdbGetFnBody(self,tableName,idxOrClmSymbol,dbIdx,idxType,idxTable,rootDbTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterVal,appendConditionFlagParameterName):
+        idx = idxOrClmSymbol
+        fnBody = ''
+        if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
+            fnBody = 'char *temp = NULL;\n'
+            if dbIdx['Type']['Key']:
+                if type(dbIdx['Type']['Key']) == dict:
+                    tmpOvsdbGetStringForKeyIntType = ''
+                    tmpOvsdbGetStringForKeyStrType = ''
+
+                    tmpOvsdbGetStringForKeyStrType = """
+for (int i = 0; i < @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->n_@@SUBSTITUTE_OVS_COL_NAME@@; i++) {
+    if(strcmp("##PUT_MULTIPLE_KEY_VALUES_HERE_IF_AVAILABLE##", @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->key_@@SUBSTITUTE_OVS_COL_NAME@@[i]) == 0) {
+        temp = (char*)@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->value_@@SUBSTITUTE_OVS_COL_NAME@@[i];
+    }
+}
+"""
+
+                    tmpOvsdbGetStringForKeyIntType = """
+for (int i = 0; i < @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->n_@@SUBSTITUTE_OVS_COL_NAME@@; i++) {
+    if(##PUT_MULTIPLE_KEY_VALUES_HERE_IF_AVAILABLE## == @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->key_@@SUBSTITUTE_OVS_COL_NAME@@[i]) {
+        temp = (char*)@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->value_@@SUBSTITUTE_OVS_COL_NAME@@[i];
+    }
+}
+"""
+
+                    tmpOvsdbGetStringForKeyIntType = tmpOvsdbGetStringForKeyIntType.replace('@@SUBSTITUTE_OVS_COL_NAME@@',dbIdx['OvsColumn'])
+                    tmpOvsdbGetStringForKeyIntType = tmpOvsdbGetStringForKeyIntType.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+
+                    tmpOvsdbGetStringForKeyStrType = tmpOvsdbGetStringForKeyStrType.replace('@@SUBSTITUTE_OVS_COL_NAME@@',dbIdx['OvsColumn'])
+                    tmpOvsdbGetStringForKeyStrType = tmpOvsdbGetStringForKeyStrType.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+
+                    fnBody += self.getAutoGeneratedCodeForSingleOrMultipleKeys(tableName,idx,appendConditionFlagParameterName,'##PUT_MULTIPLE_KEY_VALUES_HERE_IF_AVAILABLE##',tmpOvsdbGetStringForKeyStrType,tmpOvsdbGetStringForKeyIntType)
+                    tmpOvsdbGetStringForKeyIntType = ''
+                    tmpOvsdbGetStringForKeyStrType = ''
+                else:#should be handled for multiple-cols and singe key specification??
+                    fnBody += """
+temp = (char*)smap_get(&@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->@@SUBSTITUTE_OVS_COL_NAME@@, "@@SUBSTITUTE_TYPE_KEY@@");
+"""
+                    fnBody = fnBody.replace('@@SUBSTITUTE_TYPE_KEY@@',dbIdx['Type']['Key'])
+
+            else:#currently handling only for ovscolumn, need to handle for key pairs.
+                tmpOvsdbGetString = """
+temp = (char*)@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->##PUT_MULTIPLE_OVSDB_COLUMNS_HERE_IF_AVAILABLE##;
+"""
+                tmpOvsdbGetString = tmpOvsdbGetString.replace('@@SUBSTITUTE_OVS_COL_NAME@@',dbIdx['OvsColumn'])
+                tmpOvsdbGetString = tmpOvsdbGetString.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+
+                fnBody += self.getAutoGeneratedCodeForSingleOrMultipleOvsColumns(tableName,idx,appendConditionFlagParameterName,'##PUT_MULTIPLE_OVSDB_COLUMNS_HERE_IF_AVAILABLE##',tmpOvsdbGetString)
+                tmpOvsdbGetString = ''
+
+            if idxType == 'OctetString':
+                fnBody += """
+    *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len = temp != NULL ? strlen(temp) : 0;
+    memcpy(@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr, temp, *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len);
+"""
+
+            elif idxType == 'ObjectIdentifier':
+                fnBody += """
+oid temp_oid[MAX_OID_LEN] = {0};
+*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len = MAX_OID_LEN;
+if (temp != NULL) {
+snmp_parse_oid(temp, temp_oid, @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len);
+}
+memcpy(@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr, temp_oid, *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len);
+
+"""
+
+        else:
+            if dbIdx['Type']['Key']:
+                if type(dbIdx['Type']['Key']) == dict:
+                    tmpOvsdbGetStringForKeyIntType = ''
+                    tmpOvsdbGetStringForKeyStrType = ''
+
+                    tmpOvsdbGetStringForKeyStrType = """
+for (int i = 0; i < @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->n_@@SUBSTITUTE_OVS_COL_NAME@@; i++) {
+if(strcmp("##PUT_MULTIPLE_KEY_VALUES_HERE_IF_AVAILABLE##", @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->key_@@SUBSTITUTE_OVS_COL_NAME@@[i]) == 0) {
+    *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->value_@@SUBSTITUTE_OVS_COL_NAME@@[i];
+}
+}
+
+"""
+
+                    tmpOvsdbGetStringForKeyIntType = """
+for (int i = 0; i < @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->n_@@SUBSTITUTE_OVS_COL_NAME@@; i++) {
+if(##PUT_MULTIPLE_KEY_VALUES_HERE_IF_AVAILABLE## == @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->key_@@SUBSTITUTE_OVS_COL_NAME@@[i]) {
+    *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->value_@@SUBSTITUTE_OVS_COL_NAME@@[i];
+}
+}
+
+"""
+
+                    tmpOvsdbGetStringForKeyIntType = tmpOvsdbGetStringForKeyIntType.replace('@@SUBSTITUTE_OVS_COL_NAME@@',dbIdx['OvsColumn'])
+                    tmpOvsdbGetStringForKeyIntType = tmpOvsdbGetStringForKeyIntType.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+                    tmpOvsdbGetStringForKeyIntType = self.parseColSpecificSubstitutionsAndReturnActualString(tmpOvsdbGetStringForKeyIntType ,tableName,idx)
+
+                    tmpOvsdbGetStringForKeyStrType = tmpOvsdbGetStringForKeyStrType.replace('@@SUBSTITUTE_OVS_COL_NAME@@',dbIdx['OvsColumn'])
+                    tmpOvsdbGetStringForKeyStrType = tmpOvsdbGetStringForKeyStrType.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+                    tmpOvsdbGetStringForKeyStrType  = self.parseColSpecificSubstitutionsAndReturnActualString(tmpOvsdbGetStringForKeyStrType ,tableName,idx)
+
+                    fnBody += self.getAutoGeneratedCodeForSingleOrMultipleKeys(tableName,idx,appendConditionFlagParameterName,'##PUT_MULTIPLE_KEY_VALUES_HERE_IF_AVAILABLE##',tmpOvsdbGetStringForKeyStrType,tmpOvsdbGetStringForKeyIntType)
+                    tmpOvsdbGetStringForKeyIntType = ''
+                    tmpOvsdbGetStringForKeyStrType = ''
+                else:
+                    fnBody += """
+char *temp = (char*)smap_get(&@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->@@SUBSTITUTE_OVS_COL_NAME@@, "@@SUBSTITUTE_TYPE_KEY@@");
+if(temp == NULL) {
+    *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = 0;
+}
+else {
+    *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)atoi(temp);
+}
+
+"""
+                    fnBody = fnBody.replace('@@SUBSTITUTE_TYPE_KEY@@',dbIdx['Type']['Key'])
+
+            else:#currently handling only for ovscolumn, need to handle for key pairs.
+                tmpOvsdbGetString = """
+*@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)*(@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->##PUT_MULTIPLE_OVSDB_COLUMNS_HERE_IF_AVAILABLE##);
+"""
+                tmpOvsdbGetString = tmpOvsdbGetString.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+                tmpOvsdbGetString = tmpOvsdbGetString.replace('@@SUBSTITUTE_IDX_OR_CLM_NAME@@',idx['name'])
+                #handle this also '@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)'
+                tmpOvsdbGetString = self.parseColSpecificSubstitutionsAndReturnActualString(tmpOvsdbGetString,tableName,idx)
+
+                fnBody += self.getAutoGeneratedCodeForSingleOrMultipleOvsColumns(tableName,idx,appendConditionFlagParameterName,'##PUT_MULTIPLE_OVSDB_COLUMNS_HERE_IF_AVAILABLE##',tmpOvsdbGetString)
+
+                tmpOvsdbGetString = ''
+        if not isinstance(dbIdx['OvsColumn'],dict):
+            fnBody = fnBody.replace('@@SUBSTITUTE_OVS_COL_NAME@@',dbIdx['OvsColumn'])
+        fnBody = fnBody.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+        fnBody = fnBody.replace('@@SUBSTITUTE_IDX_OR_CLM_NAME@@',idx['name'])
+        #handle this also '@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)'
+        fnBody = self.parseColSpecificSubstitutionsAndReturnActualString(fnBody,tableName,idx)
+        return fnBody
+
+
+    #@@SUBSTITUTE_FN_BODY_4_DIFFERENT_OVS_TBL_SPECIFIED@@
+    def getOvsdbGetFnBody4DiffOvsTblSpecified(self,tableName,idxOrClmSymbol,dbIdx,idxType,idxTable,rootDbTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterVal,appendConditionFlagParameterName):
+        idx = idxOrClmSymbol
+        fnBody = ''
+        if dbIdx['CustomFunction']:
+            fnBody = """
+@@SUBSTITUTE_CUSTOM_FN_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row, @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row,
+                            @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_CALL@@ @@SUBSTITUTE_COND_FLAG_PARAM_VAL@@);
+"""
+
+            fnBody = fnBody.replace('@@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_CALL@@',
+                                                                    self.getDeclarationOfTblClmOrIdxAsFunctionCallParameter4OvsdbGetFn(tableName,idx))
+            fnBody = fnBody.replace('@@SUBSTITUTE_COND_FLAG_PARAM_VAL@@',appendConditionFlagParameterVal)
+            fnBody = fnBody.replace('@@SUBSTITUTE_CUSTOM_FN_NAME@@',dbIdx['CustomFunction'])
+            fnBody = fnBody.replace('@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@',rootDbTable)
+            fnBody = fnBody.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+
+            self.addCustomFnToCustomHeader(tableName,idx,dbIdx,rootDbTable,idxTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterName,True)
+
+        else:
+            fnBody = self.getCommonOvsdbGetFnBody(tableName,idxOrClmSymbol,dbIdx,idxType,idxTable,rootDbTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterVal,appendConditionFlagParameterName)
+
+        fnBody = self.parseColSpecificSubstitutionsAndReturnActualString(fnBody,tableName,idx)
+        return fnBody
+
+
+    #@@SUBSTITUTE_FN_BODY_4_SAME_OVS_TBL_SPECIFIED@@
+    def getOvsdbGetFnBody4SpecifiedOvsTbl(self,tableName,idxOrClmSymbol,dbIdx,idxType,idxTable,rootDbTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterVal,appendConditionFlagParameterName):
+        fnBody = ''
+        idx = idxOrClmSymbol
+
+        if dbIdx['CustomFunction']:
+            fnBody = """
+@@SUBSTITUTE_CUSTOM_FN_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row, 
+                            @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_CALL@@ @@SUBSTITUTE_COND_FLAG_PARAM_VAL@@);
+"""
+
+            fnBody = fnBody.replace('@@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_CALL@@',
+                                                                    self.getDeclarationOfTblClmOrIdxAsFunctionCallParameter4OvsdbGetFn(tableName,idx))
+            fnBody = fnBody.replace('@@SUBSTITUTE_COND_FLAG_PARAM_VAL@@',appendConditionFlagParameterVal)
+            fnBody = fnBody.replace('@@SUBSTITUTE_CUSTOM_FN_NAME@@',dbIdx['CustomFunction'])
+            fnBody = fnBody.replace('@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@',rootDbTable)
+            fnBody = fnBody.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+
+            self.addCustomFnToCustomHeader(tableName,idx,dbIdx,rootDbTable,idxTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterName,True)
+
+        else:#now idxTable and rootDbTable are same, so send rootDbTable as parameter 2wise here.
+            fnBody = self.getCommonOvsdbGetFnBody(tableName,idxOrClmSymbol,dbIdx,idxType,rootDbTable,rootDbTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterVal,appendConditionFlagParameterName)
+
+        fnBody = self.parseColSpecificSubstitutionsAndReturnActualString(fnBody,tableName,idx)
+        return fnBody
+
+
+    def getOvsdbGetFnDefnForGivenColumn(self,tableName,idxOrClmSymbol,useSchemaSpecifiedCardinality,tmpAppendConditionFlagParameterName,tmpAppendConditionTypeFlagParameterDefn ,tmpAppendConditionFlagParameterVal):
+            #dbIdx = self.jsonData[tableName]['Indexes'][idx['name']]
+            dbIdx = self.getSchemaDataObjectFromMappingFileForGivenMibObject(tableName,idxOrClmSymbol)
+            rootDbTable = self.jsonData[tableName]['RootOvsTable']
+
+            appendConditionFlagParameterName = tmpAppendConditionFlagParameterName
+            appendConditionTypeFlagParameterDefn = tmpAppendConditionTypeFlagParameterDefn # NOTE : must be last parameter always
+            appendConditionFlagParameterVal = tmpAppendConditionFlagParameterVal
+
+            if useSchemaSpecifiedCardinality:
+                #if idx['name'] in self.jsonData[tableName]['Table_MibColumnsParticipatingInMultipleCardinality']:
+                if self.mibObjectParticipatesInMultipleCardinality(tableName,idxOrClmSymbol):
+                    appendConditionFlagParameterName = tmpAppendConditionFlagParameterName
+                    appendConditionTypeFlagParameterDefn = tmpAppendConditionTypeFlagParameterDefn # NOTE : must be last parameter always
+                    appendConditionFlagParameterVal = tmpAppendConditionFlagParameterVal
+                else:
+                    appendConditionTypeFlagParameterDefn = ''
+                    appendConditionFlagParameterName = ''
+                    appendConditionFlagParameterVal = ''
+
+            idxTable = dbIdx['OvsTable']
+            idxType = self.getObjTypeString(idxOrClmSymbol)
+            if idxOrClmSymbol['name'] in self.generatedSymbols:
+                return ""
+
+            idx = idxOrClmSymbol
+            tableOvsdbGetString  = ''
+
+            if not idxTable:
+                tableOvsdbGetString = """
+void ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(struct ovsdb_idl *idl, const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row, 
+                                              @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@) {
+    @@SUBSTITUTE_FN_BODY_4_OVS_TBL_NOT_SPECIFIED@@
+}
+
+"""
+                tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_FN_BODY_4_OVS_TBL_NOT_SPECIFIED@@',
+                                                                  self.getOvsdbGetFnBodoy4NotIdxTbl(tableName,idx,dbIdx,idxType,idxTable,rootDbTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterVal,appendConditionFlagParameterName))
+
+                self.generatedSymbols[idx['name']] = 1
+
+            elif idxTable != rootDbTable:
+                tableOvsdbGetString = """
+void ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(struct ovsdb_idl *idl, const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row, 
+                                              const struct ovsrec_@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@ *@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row,
+                                              @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@) {
+    @@SUBSTITUTE_FN_BODY_4_DIFFERENT_OVS_TBL_SPECIFIED@@
+}
+
+"""
+                tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_FN_BODY_4_DIFFERENT_OVS_TBL_SPECIFIED@@',
+                                                                  self.getOvsdbGetFnBody4DiffOvsTblSpecified(tableName,idx,dbIdx,idxType,idxTable,rootDbTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterVal,appendConditionFlagParameterName))
+
+                self.generatedSymbols[idx['name']] = 1
+
+            else:
+                tableOvsdbGetString = """
+void ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(struct ovsdb_idl *idl, const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row,
+                                              @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@) {
+    @@SUBSTITUTE_FN_BODY_4_SAME_OVS_TBL_SPECIFIED@@
+}
+"""
+                self.generatedSymbols[idx['name']] = 1
+                tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_FN_BODY_4_SAME_OVS_TBL_SPECIFIED@@',
+                                                                  self.getOvsdbGetFnBody4SpecifiedOvsTbl(tableName,idxOrClmSymbol,dbIdx,idxType,idxTable,rootDbTable,appendConditionTypeFlagParameterDefn,appendConditionFlagParameterVal,appendConditionFlagParameterName))
+
+            tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@',
+                                                                    self.getDeclarationOfTblClmOrIdxAsFunctionDefnParameter4OvsdbGetFn(tableName,idx))
+            tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@',appendConditionTypeFlagParameterDefn)
+            tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_IDX_OR_CLM_NAME@@',idx['name'])
+            tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@',rootDbTable)
+            if idxTable:
+                tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@',idxTable)
+
+            return tableOvsdbGetString
+
+
+    #SUBSTITUTE_GENERATE_OVSDB_GET_FN_DECLNS_FOR_ALL_IDX_AND_COLUMNS_OF_TBL
+    def getOvsdbGetFnDefnsForAllColumns(self,tableName):
+        indexes = self.getIndexesForTable(tableName)
+
+        tmpAppendConditionFlagParameterName = ''
+        tmpAppendConditionTypeFlagParameterDefn = ''
+        tmpAppendConditionFlagParameterVal = ''
+
+        tableOvsdbGetString = ''
+        #useSchemaSpecifiedCardinality = 1 < self.tables[tableName]['Table_MibSchemaCardinalityCount']
+        useSchemaSpecifiedCardinality = self.doesTableSupportMultipleCardinality(tableName)
+        if useSchemaSpecifiedCardinality:
+            #tmpAppendConditionFlagParameterName = 'conditional_string_type'
+            #tmpAppendConditionTypeFlagParameterDefn = ', const char *' + tmpAppendConditionFlagParameterName # NOTE : must be last parameter always
+            #tmpAppendConditionFlagParameterVal = ', ' + tmpAppendConditionFlagParameterName
+            tmpAppendConditionFlagParameterName = 'conditional_enum_type'
+            tmpAppendConditionTypeFlagParameterDefn = ', int ' + tmpAppendConditionFlagParameterName # NOTE : must be last parameter always
+            tmpAppendConditionFlagParameterVal = ', ' + tmpAppendConditionFlagParameterName
+        else:
+            if(self.tables[tableName]['supportsBothIpv4Ipv6']):
+                #appendConditionFlagParameterName = 'is_for_ip_req_type'
+                #appendConditionTypeFlagParameterDefn = ', int ' + appendConditionFlagParameterName # NOTE : must be last parameter always
+                #appendConditionFlagParameterVal = ', ' + appendConditionFlagParameterName
+                tmpAppendConditionFlagParameterName = 'is_for_ip_req_type'
+                tmpAppendConditionTypeFlagParameterDefn = ', int ' + tmpAppendConditionFlagParameterName # NOTE : must be last parameter always
+                tmpAppendConditionFlagParameterVal = ', ' + tmpAppendConditionFlagParameterName
+
+        for idx in indexes:
+            tableOvsdbGetString += self.getOvsdbGetFnDefnForGivenColumn(tableName,idx,useSchemaSpecifiedCardinality,tmpAppendConditionFlagParameterName,tmpAppendConditionTypeFlagParameterDefn,tmpAppendConditionFlagParameterVal)
+
+        for col in self.tableRows[self.tables[tableName]['row']]['columns']:
+            if col['name'] in [idx['name'] for idx in indexes] or col['name'] in self.generatedSymbols:
+                continue
+            tableOvsdbGetString += self.getOvsdbGetFnDefnForGivenColumn(tableName,col,useSchemaSpecifiedCardinality,tmpAppendConditionFlagParameterName,tmpAppendConditionTypeFlagParameterDefn,tmpAppendConditionFlagParameterVal)
+
+        return tableOvsdbGetString
+
+
+
+    def generateTableNameOvsdbGetDotCFile(self,moduleName,tableName):
+        tableOvsdbGetString = self.loadNetSnmpTemplateCodeFromFile('tableName_ovsdb_get.c.template')
+        #@@SUBSTITUTE_ADD_OVSDB_COLS_TO_IDL@@
+        idlAddClmCode = ''
+        for (ovsdbRow, ovsdbCol) in self.getOvsdbTableColumnsForTable(tableName):
+            tmpIdlCode = """
+ovsdb_idl_add_column(idl, &ovsrec_@@SUBSTITUTE_OVSDB_ROW@@_col_@@SUBSTITUTE_OVSDB_COL@@);
+"""
+            tmpIdlCode = tmpIdlCode.replace('@@SUBSTITUTE_OVSDB_ROW@@',ovsdbRow)
+            tmpIdlCode = tmpIdlCode.replace('@@SUBSTITUTE_OVSDB_COL@@',ovsdbCol)
+            idlAddClmCode += tmpIdlCode
+
+        tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_MODULE_NAME@@',moduleName)
+        tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_TABLE_NAME@@',tableName)
+        tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_ADD_OVSDB_COLS_TO_IDL@@',idlAddClmCode)
+        tableOvsdbGetString = tableOvsdbGetString.replace('@@SUBSTITUTE_GENERATE_OVSDB_GET_FN_DECLNS_FOR_ALL_IDX_AND_COLUMNS_OF_TBL@@',self.getOvsdbGetFnDefnsForAllColumns(tableName))
+
+        tableOvsdbGetString  = self.parseTableSpecificSubstitutionsAndReturnActualString(tableOvsdbGetString,tableName)
+
+        self.fileWrite(fileName=tableName + '_ovsdb_get.c',data=tableOvsdbGetString)
+        tableOvsdbGetString = ''
+
+
+
+
+
     def genCTableFiles(self, moduleName):
         for key in self.tables.keys():
             tableName = key
-            indexes = self.getIndexesForTable(tableName)
-            ovsdbTables = self.getOvsdbRowsForTable(tableName)
             if tableName in self.jsonData:
                 if self.jsonData[tableName]['MibType'] != 'Table':
                     raise Exception('%s is not a table',tableName)
-                rootDbTable = self.jsonData[tableName]['RootOvsTable']
             else:
                 continue
-            tableFileString = """#include <net-snmp/net-snmp-config.h>
-#include <net-snmp/net-snmp-features.h>
-#include <net-snmp/net-snmp-includes.h>
-#include <net-snmp/agent/net-snmp-agent-includes.h>
-#include <net-snmp/agent/mib_modules.h>
-#include "vswitch-idl.h"
-#include "ovsdb-idl.h"
+            self.tables[tableName]['Table_MibSchemaCardinalityCount'] = 1
+            self.tables[tableName]['supportsBothIpv4Ipv6'] = False
+            ignoreCardinality = False
 
-"""
-            tableFileString += '#include "' + tableName + '.h"\n'
-            tableFileString += '#include "' + tableName + '_interface.h"\n'
-            tableFileString += '#include "' + tableName + '_ovsdb_get.h"\n\n'
-            tableFileString += 'const oid ' + tableName + '_oid[] = {' + tableName.upper() + '_OID };\n'
-            tableFileString += 'const int ' + tableName + '_oid_size = OID_LENGTH(' + tableName + '_oid);\n\n'
-            tableFileString += tableName + '_registration ' + tableName + '_user_context;\n'
-            tableFileString += 'void initialize_table_' + tableName + '(void);\n'
-            tableFileString += 'void shutdown_table_' + tableName + '(void);\n\n'
-            tableFileString += 'void init_' + tableName + '(void) {\n'
-            tableFileString += 'DEBUGMSGTL(("verbose:' + tableName + ':init_' + tableName + '", "called\\n"));\n\n'
-            tableFileString += tableName + '_registration * user_context;\n'
-            tableFileString += 'u_long flags;\n\n'
-            tableFileString += 'user_context = netsnmp_create_data_list("' + tableName + '",NULL,NULL);\n'
-            tableFileString += 'flags = 0;\n\n'
-            tableFileString += '_' + tableName + '_initialize_interface(user_context,flags);\n\n'
-            tableFileString += tableName + '_ovsdb_idl_init(idl);\n'
-            tableFileString += '}\n\n'
-            tableFileString += 'void shutdown_' + tableName + '(void) {\n'
-            tableFileString += '_' + tableName + '_shutdown_interface(&' + tableName + '_user_context);\n'
-            tableFileString += '}\n\n'
-            tableFileString += 'int ' + tableName + '_rowreq_ctx_init(' + tableName + '_rowreq_ctx *rowreq_ctx, void *user_init_ctx) {\n'
-            tableFileString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_rowreq_ctx_init","called\\n"));\n\n'
-            tableFileString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
-            tableFileString += 'return MFD_SUCCESS;\n'
-            tableFileString += '}\n\n'
-            tableFileString += 'void ' + tableName + '_rowreq_ctx_cleanup(' + tableName + '_rowreq_ctx *rowreq_ctx) {\n'
-            tableFileString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_rowreq_ctx_cleanup","called\\n"));\n'
-            tableFileString += 'netsnmp_assert(NULL != rowreq_ctx);\n'
-            tableFileString += '}\n\n'
-            tableFileString += 'int ' + tableName + '_pre_request(' + tableName + '_registration *user_context) {\n'
-            tableFileString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_pre_request","called\\n"));\n'
-            tableFileString += 'return MFD_SUCCESS;\n'
-            tableFileString += '}\n\n'
-            tableFileString += 'int ' + tableName + '_post_request(' + tableName + '_registration *user_context, int rc) {\n'
-            tableFileString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_post_request","called\\n"));\n'
-            tableFileString += 'return MFD_SUCCESS;\n'
-            tableFileString += '}\n'
-            self.fileWrite(fileName=tableName + '.c',data=tableFileString)
+            if 'Table_MibSchemaCardinality' in self.jsonData[tableName]:
+                try:
+                    self.tables[tableName]['Table_MibSchemaCardinalityCount'] = int(self.jsonData[tableName]['Table_MibSchemaCardinality' ][self.jsonData[tableName]['Table_MibSchemaCardinality' ].index(':')+1:] )
+                    if 'Table_MibSchemaCardinalityConditions' in self.jsonData[tableName] and self.jsonData[tableName]['Table_MibSchemaCardinalityConditions' ]:
+                        if not isinstance(self.jsonData[tableName]['Table_MibSchemaCardinalityConditions'],list) or len(self.jsonData[tableName]['Table_MibSchemaCardinalityConditions']) != self.tables[tableName]['Table_MibSchemaCardinalityCount']:
+                            print 'Error while parsing  Table_MibSchemaCardinalityConditions for the table ' + tableName 
+                            print 'Cardinality count and Cardinality condition entries count must match in the mapping file.'
+                            ignoreCardinality = True
+                        else:
+                            self.tables[tableName]['CardinalityConditionTypeConstants'] = {}
+                            for conditionType in self.jsonData[tableName]['Table_MibSchemaCardinalityConditions']:
+                                self.tables[tableName]['CardinalityConditionTypeConstants'][conditionType] = tableName.upper() + '_CONDITION_TYPE_' + conditionType.upper()
+                            ignoreCardinality = False
+                    else:
+                        print 'Error while parsing  Table_MibSchemaCardinalityConditions for the table ' + tableName + 'Table_MibSchemaCardinalityConditions tag not found in the json mapping file for this table.'
+                        ignoreCardinality = True
+                except :
+                    print 'Error while parsing  Table_MibSchemaCardinality for the table ' + tableName + ', check the json mapping file for this table.'
+                    ignoreCardinality = True
 
-            tableFileHeaderString = '#ifndef ' + tableName.upper() + '_H\n'
-            tableFileHeaderString += '#define ' + tableName.upper() + '_H\n'
-            tableFileHeaderString += '#include <net-snmp/library/asn1.h>\n'
-            tableFileHeaderString += '#include "' + tableName + '_oids.h"\n'
-            tableFileHeaderString += '#include "' + tableName + '_enums.h"\n\n'
-            tableFileHeaderString += 'void init_' + tableName + '(void);\n'
-            tableFileHeaderString += 'void shutdown_' + tableName + '(void);\n\n'
-            tableFileHeaderString += 'typedef netsnmp_data_list ' + tableName + '_registration;\n\n'
-            tableFileHeaderString += 'typedef struct ' + tableName + '_data_s {\n'
-            for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] not in self.tableRows[self.tables[tableName]['row']]['index']:
-                    if self.getObjTypeString(col) == 'OctetString':
-                        stringLength = self.getStringLength(col)
-                        tableFileHeaderString += 'char ' + col['name'] + '[' + str(stringLength) + '];\n'
-                        tableFileHeaderString += 'size_t ' + col['name'] + '_len;\n'
-                    elif self.getObjTypeString(col) == 'ObjectIdentifier':
-                        tableFileHeaderString += 'oid ' + col['name'] + '[MAX_OID_LEN];\n'
-                        tableFileHeaderString += 'size_t ' + col['name'] + '_len;\n'
-                    else:
-                        tableFileHeaderString += self.ctypeClasses[self.getObjTypeString(col)] + ' ' + col['name'] + ';\n'
-            tableFileHeaderString += '} ' + tableName + '_data;\n\n'
-            tableFileHeaderString += 'typedef struct ' + tableName + '_mib_index_s {\n'
-            for idx in indexes:
-                if self.getObjTypeString(idx) == 'OctetString':
-                    stringLength = self.getStringLength(idx)
-                    tableFileHeaderString += 'char ' + idx['name'] + '[' + str(stringLength) + '];\n'
-                    tableFileHeaderString += 'size_t ' + idx['name'] + '_len;\n'
-                elif self.getObjTypeString(idx) == 'ObjectIdentifier':
-                    tableFileHeaderString += 'oid ' + idx['name'] + '[MAX_OID_LEN];\n'
-                    tableFileHeaderString += 'size_t ' + idx['name'] + '_len;\n'
-                else:
-                    tableFileHeaderString += self.ctypeClasses[self.getObjTypeString(idx)] + ' ' + idx['name'] + ';\n'
-            tableFileHeaderString += '} ' + tableName + '_mib_index;\n\n'
-            #tableFileHeaderString += '#define MAX_' + tableName+'_IDX_LEN 1'
-            tableFileHeaderString += 'typedef struct ' + tableName + '_rowreq_ctx_s {\n'
-            tableFileHeaderString += 'netsnmp_index oid_idx;\n'
-            tableFileHeaderString += 'oid oid_tmp[MAX_OID_LEN];\n'
-            tableFileHeaderString += tableName + '_mib_index tbl_idx;\n'
-            tableFileHeaderString += tableName + '_data data;\n'
-            tableFileHeaderString += 'u_int rowreq_flags;\n'
-            tableFileHeaderString += 'netsnmp_data_list *' + tableName + '_data_list;\n'
-            tableFileHeaderString += '} ' + tableName + '_rowreq_ctx;\n\n'
-            tableFileHeaderString += 'typedef struct ' + tableName + '_ref_rowreq_ctx_s {\n'
-            tableFileHeaderString += tableName + '_rowreq_ctx *rowreq_ctx;\n'
-            tableFileHeaderString += '} ' + tableName + '_ref_rowreq_ctx;\n\n'
-            tableFileHeaderString += 'int ' + tableName + '_pre_request(' + tableName + '_registration *user_context);\n'
-            tableFileHeaderString += 'int ' + tableName + '_post_request(' + tableName + '_registration *user_context, int rc);\n'
-            tableFileHeaderString += 'int ' + tableName + '_rowreq_ctx_init(' + tableName + '_rowreq_ctx *rowreq_ctx, void *user_init_ctx);\n'
-            tableFileHeaderString += 'void ' + tableName + '_rowreq_ctx_cleanup(' + tableName + '_rowreq_ctx *rowreq_ctx);\n'
-            tableFileHeaderString += tableName + '_rowreq_ctx* ' + tableName + '_row_find_by_mib_index(' + tableName + '_mib_index *mib_idx);\n'
-            tableFileHeaderString += 'extern const oid ' + tableName + '_oid[];\n'
-            tableFileHeaderString += 'extern const int ' + tableName + '_oid_size;\n'
-            tableFileHeaderString += '#include "' + tableName + '_interface.h"\n'
-            tableFileHeaderString += '#include "' + tableName + '_data_access.h"\n'
-            tableFileHeaderString += '#include "' + tableName + '_data_get.h"\n'
-            tableFileHeaderString += '#include "' + tableName + '_data_set.h"\n\n'
-            tableFileHeaderString += '#endif'
-            self.fileWrite(fileName= tableName + '.h',data=tableFileHeaderString)
+            if ignoreCardinality:
+                print 'Ignoring the cardinality for the table ' + tableName
+                self.tables[tableName]['Table_MibSchemaCardinalityCount'] = 1
 
-            tableOidsHeaderString = '#ifndef ' + tableName.upper() + '_OIDS_H\n'
-            tableOidsHeaderString += '#define ' + tableName.upper() + '_OIDS_H\n'
-            tableOidsHeaderString += '#include <sys/types.h>\n\n'
-            oidStr,parentOid = self.tables[tableName]['data']['oid']
-            oidStr = oidStr.replace('[','').replace(']','')
-            tableOidsHeaderString += '#define ' + tableName.upper() + '_OID ' + oidStr + '\n'
-            minColumn = None
-            for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                tempOid, tempParentOid = col['oid']
-                tempOid = tempOid[tempOid.rfind(',') + 1:tempOid.rfind(']')]
-                if col not in indexes and not minColumn:
-                    minColumn = col
-                tableOidsHeaderString += '#define COLUMN_' + col['name'].upper() + ' ' + tempOid + '\n'
-            tableOidsHeaderString += '\n\n#define ' + tableName.upper() + '_MIN_COL COLUMN_' + minColumn['name'].upper() + '\n'
-            tableOidsHeaderString += '#define ' + tableName.upper() + '_MAX_COL COLUMN_' + self.tableRows[self.tables[tableName]['row']]['columns'][-1]['name'].upper() + '\n'
-            tableOidsHeaderString += '#endif'
-            self.fileWrite(fileName=tableName + '_oids.h',data=tableOidsHeaderString)
 
-            tableDataGetString = """#include <net-snmp/net-snmp-config.h>
-#include <net-snmp/net-snmp-features.h>
-#include <net-snmp/net-snmp-includes.h>
-#include <net-snmp/agent/net-snmp-agent-includes.h>
-"""
-            tableDataGetString += '#include "' + tableName + '.h"\n\n'
-            tableDataGetString += 'int ' + tableName + '_indexes_set_tbl_idx(' + tableName + '_mib_index *tbl_idx'
-            for idx in indexes:
-                idxType = self.getObjTypeString(idx)
-                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
-                    tableDataGetString += ', '
-                    if idxType == 'OctetString':
-                        tableDataGetString += 'char *'
-                    else:
-                        tableDataGetString += 'oid *'
-                        # Verify if this is the thing for oid
-                    tableDataGetString += idx['name'] + '_val_ptr, size_t ' + idx['name'] + '_val_ptr_len'
-                else:
-                    tableDataGetString += ', ' + self.ctypeClasses[idxType] + ' ' + idx['name'] + '_val'
-            tableDataGetString += ') {\n'
-            tableDataGetString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_indexes_set_tbl_idx","called\\n"));\n\n'
-            for idx in indexes:
-                idxType = self.getObjTypeString(idx)
-                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
-                    tableDataGetString += '\ntbl_idx->' + idx['name'] + '_len = sizeof(tbl_idx->' + idx['name'] + ')/sizeof(tbl_idx->' + idx['name'] + '[0]);\n'
-                    tableDataGetString += 'if ((NULL == tbl_idx->' + idx['name'] + ') || (tbl_idx->' + idx['name'] + '_len < (' + idx['name'] + '_val_ptr_len))) {\n'
-                    tableDataGetString += 'snmp_log(LOG_ERR, "not enough space for value (' + idx['name'] + '_val_ptr)\\n");\n'
-                    tableDataGetString += 'return MFD_ERROR;\n'
-                    tableDataGetString += '}\n'
-                    tableDataGetString += 'tbl_idx->' + idx['name'] + '_len = ' + idx['name'] + '_val_ptr_len;\n'
-                    tableDataGetString += 'memcpy(tbl_idx->' + idx['name'] + ', ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len* sizeof(' + idx['name'] + '_val_ptr[0]));\n'
-                else:
-                    tableDataGetString += 'tbl_idx->' + idx['name'] + ' = ' + idx['name'] + '_val;\n'
-            tableDataGetString += 'return MFD_SUCCESS;\n'
-            tableDataGetString += '}\n\n'
-            tableDataGetString += 'int ' + tableName + '_indexes_set(' + tableName + '_rowreq_ctx *rowreq_ctx'
-            for idx in indexes:
-                idxType = self.getObjTypeString(idx)
-                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
-                    tableDataGetString += ', '
-                    if idxType == 'OctetString':
-                        tableDataGetString += 'char *'
-                    else:
-                        tableDataGetString += 'oid *'
-                    tableDataGetString += idx['name'] + '_val_ptr, size_t ' + idx['name'] + '_val_ptr_len'
-                else:
-                    tableDataGetString += ', ' + self.ctypeClasses[self.getObjTypeString(idx)] + ' ' + idx['name'] + '_val'
-            tableDataGetString += ') {\n'
-            tableDataGetString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_indexes_set","called\\n"));\n'
-            tableDataGetString += 'if (MFD_SUCCESS != ' + tableName + '_indexes_set_tbl_idx(&rowreq_ctx->tbl_idx'
-            for idx in indexes:
-                idxType = self.getObjTypeString(idx)
-                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
-                    tableDataGetString += ', ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len\n'
-                else:
-                    tableDataGetString += ', ' + idx['name'] + '_val'
-            tableDataGetString += ')) {\n'
-            tableDataGetString += 'return MFD_ERROR;\n'
-            tableDataGetString += '}\n'
-            tableDataGetString += 'rowreq_ctx->oid_idx.len = sizeof(rowreq_ctx->oid_tmp)/sizeof(oid);\n'
-            tableDataGetString += 'if (0 != ' + tableName + '_index_to_oid(&rowreq_ctx->oid_idx, &rowreq_ctx->tbl_idx)) {\n'
-            tableDataGetString += 'return MFD_ERROR;\n'
-            tableDataGetString += '}\n'
-            tableDataGetString += 'return MFD_SUCCESS;\n'
-            tableDataGetString += '}\n\n'
-            for idx in indexes:
-                if idx['maxaccess'] == 'notaccessible':
-                    continue
-                tableDataGetString += 'int ' + idx['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, '
-                idxType = self.getObjTypeString(idx)
-                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
-                    if idxType == 'OctetString':
-                        tableDataGetString += 'char **'
-                    else:
-                        tableDataGetString += 'oid **'
-                    tableDataGetString += idx['name'] + '_val_ptr_ptr, size_t *' + idx['name'] + '_val_ptr_len_ptr) {\n'
-                    tableDataGetString += 'netsnmp_assert( (NULL != ' + idx['name'] + '_val_ptr_ptr) && (NULL != *' + idx['name'] + '_val_ptr_ptr));\n'
-                    tableDataGetString += 'netsnmp_assert(NULL != ' + idx['name'] + '_val_ptr_len_ptr);\n'
-                else:
-                    tableDataGetString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr) {\n'
-                    tableDataGetString += 'netsnmp_assert(NULL != ' + idx['name'] + '_val_ptr);\n'
-                tableDataGetString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + idx['name'] + '_get","called\\n"));\n'
-                tableDataGetString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
-                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
-                    tableDataGetString += 'if ((NULL == (*' + idx['name'] + '_val_ptr_ptr)) || ((*' + idx['name'] + '_val_ptr_len_ptr) < (rowreq_ctx->tbl_idx.' + idx['name'] + '_len* sizeof(rowreq_ctx->tbl_idx.' + idx['name'] + '[0])))) {\n'
-                    tableDataGetString += '(* ' + idx['name'] + '_val_ptr_ptr) = malloc(rowreq_ctx->tbl_idx.' + idx['name'] + '_len* sizeof(rowreq_ctx->tbl_idx.' + idx['name'] + '[0]));\n'
-                    tableDataGetString += 'if (NULL == (*' + idx['name'] + '_val_ptr_ptr)) {\n'
-                    tableDataGetString += 'snmp_log(LOG_ERR, "could not allocate memory (rowreq_ctx->tbl_idx.' + idx['name'] + ')\\n");\n'
-                    tableDataGetString += 'return MFD_ERROR;\n'
-                    tableDataGetString += '}\n'
-                    tableDataGetString += '}\n'
-                    tableDataGetString += '(* ' + idx['name'] + '_val_ptr_len_ptr) = rowreq_ctx->tbl_idx.' + idx['name'] + '_len* sizeof(rowreq_ctx->tbl_idx.' + idx['name'] + '[0]);\n'
-                    tableDataGetString += 'memcpy((*' + idx['name'] + '_val_ptr_ptr), rowreq_ctx->tbl_idx.' + idx['name'] + ', rowreq_ctx->tbl_idx.' + idx['name'] + '_len* sizeof(rowreq_ctx->tbl_idx.' + idx['name'] + '[0]));\n'
-                else:
-                    tableDataGetString += '(*' + idx['name'] + '_val_ptr) = rowreq_ctx->tbl_idx.' + idx['name'] + ';\n'
-                tableDataGetString += 'return MFD_SUCCESS;\n'
-                tableDataGetString += '}\n\n'
-            for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in [idx['name'] for idx in indexes] or col['maxaccess'] == 'notaccessible':
-                    continue
-                tableDataGetString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, '
-                colType = self.getObjTypeString(col)
-                if colType == 'OctetString' or colType == 'ObjectIdentifier':
-                    if colType == 'OctetString':
-                        tableDataGetString += 'char **'
-                    else:
-                        tableDataGetString += 'oid **'
-                    tableDataGetString += col['name'] + '_val_ptr_ptr, size_t *' + col['name'] + '_val_ptr_len_ptr) {\n'
-                    tableDataGetString += 'netsnmp_assert( (NULL != ' + col['name'] + '_val_ptr_ptr) && (NULL != *' + col['name'] + '_val_ptr_ptr));\n'
-                    tableDataGetString += 'netsnmp_assert(NULL != ' + col['name'] + '_val_ptr_len_ptr);\n'
-                else:
-                    tableDataGetString += self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr) {\n'
-                    tableDataGetString += 'netsnmp_assert(NULL != ' + col['name'] + '_val_ptr);\n'
-                tableDataGetString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + col['name'] + '_get","called\\n"));\n'
-                tableDataGetString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
-                if colType == 'OctetString' or colType == 'ObjectIdentifier':
-                    tableDataGetString += 'if ((NULL == (*' + col['name'] + '_val_ptr_ptr)) || ((*' + col['name'] + '_val_ptr_len_ptr) < (rowreq_ctx->data.' + col['name'] + '_len* sizeof(rowreq_ctx->data.' + col['name'] + '[0])))) {\n'
-                    tableDataGetString += '(* ' + col['name'] + '_val_ptr_ptr) = malloc(rowreq_ctx->data.' + col['name'] + '_len* sizeof(rowreq_ctx->data.' + col['name'] + '[0]));\n'
-                    tableDataGetString += 'if (NULL == (*' + col['name'] + '_val_ptr_ptr)) {\n'
-                    tableDataGetString += 'snmp_log(LOG_ERR, "could not allocate memory (rowreq_ctx->data.' + col['name'] + ')\\n");\n'
-                    tableDataGetString += 'return MFD_ERROR;\n'
-                    tableDataGetString += '}\n'
-                    tableDataGetString += '}\n'
-                    tableDataGetString += '(* ' + col['name'] + '_val_ptr_len_ptr) = rowreq_ctx->data.' + col['name'] + '_len* sizeof(rowreq_ctx->data.' + col['name'] + '[0]);\n'
-                    tableDataGetString += 'memcpy((*' + col['name'] + '_val_ptr_ptr), rowreq_ctx->data.' + col['name'] + ', rowreq_ctx->data.' + col['name'] + '_len* sizeof(rowreq_ctx->data.' + col['name'] + '[0]));\n'
-                else:
-                    tableDataGetString += '(*' + col['name'] + '_val_ptr) = rowreq_ctx->data.' + col['name'] + ';\n'
-                tableDataGetString += 'return MFD_SUCCESS;\n'
-                tableDataGetString += '}\n\n'
-            self.fileWrite(fileName=tableName + '_data_get.c',data=tableDataGetString)
+            if 1 == self.tables[tableName]['Table_MibSchemaCardinalityCount']:
+                #check if any one of the indexes are of type 'InetAddressType' or 'InetVersion'
+                #for tempidx in indexes:
+                for tempidx in self.getIndexesForTable(tableName):
+                    if 'SimpleSyntax' in tempidx['syntax'] and 'objType' in tempidx['syntax']['SimpleSyntax']:
+                        tempVal = tempidx['syntax']['SimpleSyntax']['objType']
+                        if 'InetAddressType' == tempVal or 'InetVersion' == tempVal :
+                            self.tables[tableName]['supportsBothIpv4Ipv6'] = True
+                            break
+            self.generateTableNameDotCSourceFile(tableName)
+            self.generateTableNameDotHFile(tableName)
 
-            tableDataGetHeaderString = '#ifndef ' + tableName.upper() + '_DATA_GET_H\n'
-            tableDataGetHeaderString += '#define ' + tableName.upper() + '_DATA_GET_H\n\n'
-            for idx in indexes:
-                if idx['maxaccess'] == 'notaccessible':
-                    continue
-                idxType = self.getObjTypeString(idx)
-                if idxType == 'OctetString':
-                    tableDataGetHeaderString += 'int ' + idx['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, char **' + idx['name'] + '_val_ptr_ptr, size_t *' + idx['name'] + '_val_ptr_len_ptr);\n\n'
-                elif idxType == 'ObjectIdentifier':
-                    tableDataGetHeaderString += 'int ' + idx['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, oid **' + idx['name'] + '_val_ptr_ptr, size_t *' + idx['name'] + '_val_ptr_len_ptr);\n\n'
-                else:
-                    tableDataGetHeaderString += 'int ' + idx['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx,' + self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n\n'
-            for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in [idx['name'] for idx in indexes] or col['maxaccess'] == 'notaccessible':
-                    continue
-                colType = self.getObjTypeString(col)
-                if colType == 'OctetString':
-                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, char **' + col['name'] + '_val_ptr_ptr, size_t *' + col['name'] + '_val_ptr_len_ptr);\n\n'
-                elif colType == 'ObjectIdentifier':
-                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx, oid **' + col['name'] + '_val_ptr_ptr, size_t *' + col['name'] + '_val_ptr_len_ptr);\n\n'
-                else:
-                    tableDataGetHeaderString += 'int ' + col['name'] + '_get(' + tableName + '_rowreq_ctx *rowreq_ctx,' + self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n\n'
-            tableDataGetHeaderString += 'int ' + tableName + '_indexes_set_tbl_idx(' + tableName + '_mib_index *tbl_idx'
-            for idx in indexes:
-                idxType = self.getObjTypeString(idx)
-                if idxType == 'OctetString':
-                    tableDataGetHeaderString += ', char *' + idx['name'] + '_val_ptr, size_t ' + idx['name'] + '_val_ptr_len'
-                elif idxType == 'ObjectIdentifier':
-                    tableDataGetHeaderString += ', oid *' + idx['name'] + '_val_ptr, size_t ' + idx['name'] + '_val_ptr_len'
-                else:
-                    tableDataGetHeaderString += ', ' + self.ctypeClasses[idxType] + ' ' + idx['name'] + '_val'
-            tableDataGetHeaderString += ');\n\n'
-            tableDataGetHeaderString += 'int ' + tableName + '_indexes_set(' + tableName + '_rowreq_ctx *rowreq_ctx'
-            for idx in indexes:
-                idxType = self.getObjTypeString(idx)
-                if idxType == 'OctetString':
-                    tableDataGetHeaderString += ', char *' + idx['name'] + '_val_ptr, size_t ' + idx['name'] + '_val'
-                elif idxType == 'ObjectIdentifier':
-                    tableDataGetHeaderString += ', oid *' + idx['name'] + '_val_ptr, size_t ' + idx['name'] + '_val'
-                else:
-                    tableDataGetHeaderString += ', ' + self.ctypeClasses[idxType] + ' ' + idx['name'] + '_val'
-            tableDataGetHeaderString += ');\n'
-            tableDataGetHeaderString += '#endif\n'
-            self.fileWrite(fileName=tableName + '_data_get.h',data=tableDataGetHeaderString)
+            self.generateTableNameOidsDotHFile(tableName)
 
-            tableDataSetString = """#include <net-snmp/net-snmp-config.h>
-#include <net-snmp/net-snmp-features.h>
-#include <net-snmp/net-snmp-includes.h>
-#include <net-snmp/agent/net-snmp-agent-includes.h>
-"""
-            tableDataSetString += '#include "' + tableName + '.h"\n'
-            self.fileWrite(fileName=tableName + '_data_set.c',data=tableDataSetString)
+            self.generateTableDataGetDotCFile(tableName)
+            self.generateTableDataGetDotHFile(tableName)
 
-            tableDataSetHeaderString = '#ifndef ' + tableName.upper() + '_DATA_SET_H\n'
-            tableDataSetHeaderString += '#define ' + tableName.upper() + '_DATA_SET_H\n'
-            tableDataSetHeaderString += '#endif\n'
-            self.fileWrite(fileName=tableName + '_data_set.h',data=tableDataSetHeaderString)
+            self.generateTableDataSetDotCFile(tableName)
+            self.generateTableDataSetDotHFile(tableName)
 
-            tableDataAccessString = """#include <net-snmp/net-snmp-config.h>
-#include <net-snmp/net-snmp-features.h>
-#include <net-snmp/net-snmp-includes.h>
-#include <net-snmp/agent/net-snmp-agent-includes.h>
-"""
-            tableDataAccessString += '#include "' + moduleName + '_custom.h"\n'
-            tableDataAccessString += '#include "' + tableName + '.h"\n'
-            tableDataAccessString += '#include "' + tableName + '_data_access.h"\n'
-            tableDataAccessString += '#include "' + tableName + '_ovsdb_get.h"\n\n'
-            tableDataAccessString += '#include "openswitch-idl.h"\n'
-            tableDataAccessString += '#include "ovsdb-idl.h"\n'
-            tableDataAccessString += '#include "vswitch-idl.h"\n'
-            tableDataAccessString += '#include "openvswitch/vlog.h"\n\n'
-            tableDataAccessString += 'int ' + tableName + '_init_data(' + tableName + '_registration *' + tableName + '_reg) {\n'
-            tableDataAccessString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_init_data","called\\n"));\n'
-            tableDataAccessString += 'return MFD_SUCCESS;\n'
-            tableDataAccessString += '}\n\n'
-            tableDataAccessString += 'void ' + tableName + '_container_init(netsnmp_container **container_ptr_ptr, netsnmp_cache *cache) {\n'
-            tableDataAccessString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_container_init","called\\n"));\n'
-            tableDataAccessString += 'if (NULL == container_ptr_ptr) {\n'
-            tableDataAccessString += 'snmp_log(LOG_ERR,"bad container param to ' + tableName + '_container_init\\n");\n'
-            tableDataAccessString += 'return;\n'
-            tableDataAccessString += '}\n'
-            tableDataAccessString += '*container_ptr_ptr = NULL;\n'
-            tableDataAccessString += 'if (NULL == cache) {\n'
-            tableDataAccessString += 'snmp_log(LOG_ERR,"bad cache param to ' + tableName + '_container_init\\n");\n'
-            tableDataAccessString += 'return;\n'
-            tableDataAccessString += '}\n'
-            tableDataAccessString += 'cache->timeout = ' + tableName.upper() + '_CACHE_TIMEOUT;\n'
-            tableDataAccessString += '}\n\n'
-            tableDataAccessString += 'void ' + tableName + '_container_shutdown(netsnmp_container *container_ptr) {\n'
-            tableDataAccessString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_container_shutdown","called\\n"));\n'
-            tableDataAccessString += 'if (NULL == container_ptr) {\n'
-            tableDataAccessString += 'snmp_log(LOG_ERR, "bad params to ' + tableName + '_container_shutdown\\n");\n'
-            tableDataAccessString += 'return;\n'
-            tableDataAccessString += '}\n'
-            tableDataAccessString += '}\n\n'
-            tableDataAccessString += 'int ' + tableName + '_container_load(netsnmp_container *container) {\n'
-            tableDataAccessString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_container_load","called\\n"));\n'
-            tableDataAccessString += tableName + '_rowreq_ctx *rowreq_ctx;\n'
-            tableDataAccessString += 'size_t count = 0;\n\n'
-            tableDataAccessString += self.getOvsdbRowsStringForTable(ovsdbTables)
-            tableDataAccessString += self.getLocalsStringForTable(tableName, indexes)
-            tableDataAccessString += self.getFirstIntanceStringForTable(tableName,ovsdbTables)
-            tableDataAccessString += self.getForLoopStringForTable(tableName, indexes)
-            tableDataAccessString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_container_load","inserted %d records\\n",(int)count));\n'
-            tableDataAccessString += 'return MFD_SUCCESS;\n'
-            tableDataAccessString += '}\n\n'
-            tableDataAccessString += 'void ' + tableName + '_container_free(netsnmp_container *container) {\n'
-            tableDataAccessString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_container_free","called\\n"));\n'
-            tableDataAccessString += '}\n\n'
-            tableDataAccessString += 'int ' + tableName + '_row_prep(' + tableName + '_rowreq_ctx *rowreq_ctx) {\n'
-            tableDataAccessString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_row_prep","called\\n"));\n'
-            tableDataAccessString += 'netsnmp_assert(NULL != rowreq_ctx);\n'
-            tableDataAccessString += 'return MFD_SUCCESS;\n'
-            tableDataAccessString += '}\n'
-            self.fileWrite(fileName=tableName + '_data_access.c',data=tableDataAccessString)
+            self.generateTableDataAccessDotCFile(moduleName, tableName)
+            self.generateTableDataAccessDotHFile(tableName)
 
-            tableDataAccessHeaderString = '#ifndef ' + tableName.upper() + '_DATA_ACCESS_H\n'
-            tableDataAccessHeaderString += '#define ' + tableName.upper() + '_DATA_ACCESS_H\n\n'
-            tableDataAccessHeaderString += 'extern struct ovsdb_idl *idl;\n\n'
-            tableDataAccessHeaderString += 'int ' + tableName + '_init_data(' + tableName + '_registration *' + tableName + '_reg);\n'
-            if self.jsonData[tableName]['CacheTimeout']:
-                tableDataAccessHeaderString += '#define ' + tableName.upper() + '_CACHE_TIMEOUT ' + str(self.jsonData[tableName]['CacheTimeout']) + '\n'
-            else:
-                tableDataAccessHeaderString += '#define ' + tableName.upper() + '_CACHE_TIMEOUT 30\n'
-            tableDataAccessHeaderString += 'void ' + tableName + '_container_init(netsnmp_container ** container_ptr_ptr, netsnmp_cache *cache);\n'
-            tableDataAccessHeaderString += 'void ' + tableName + '_container_shutdown(netsnmp_container *container_ptr);\n'
-            tableDataAccessHeaderString += 'int ' + tableName + '_container_load(netsnmp_container *container);\n'
-            tableDataAccessHeaderString += 'void ' + tableName + '_container_free(netsnmp_container *container);\n'
-            tableDataAccessHeaderString += 'int ' + tableName + '_cache_load(netsnmp_container *container);\n'
-            tableDataAccessHeaderString += 'void ' + tableName + '_cache_free(netsnmp_container *container);\n'
-            tableDataAccessHeaderString += 'int ' + tableName + '_row_prep(' + tableName + '_rowreq_ctx *rowreq_ctx);\n'
-            tableDataAccessHeaderString += '#endif'
-            self.fileWrite(fileName=tableName + '_data_access.h',data=tableDataAccessHeaderString)
+            self.generateTableNameOvsdbGetDotCFile(moduleName,tableName)
+            self.generateTableNameOvsdbGetDotHFile(tableName)
 
-            tableOvsdbGetString = """#include "openswitch-idl.h"
-#include "ovsdb-idl.h"
-#include "vswitch-idl.h"
-#include "openvswitch/vlog.h"
-"""
-            tableOvsdbGetString += '#include "' + moduleName + '_custom.h"\n'
-            tableOvsdbGetString += '#include "' + tableName + '_ovsdb_get.h"\n\n'
-            tableOvsdbGetString += 'void ' + tableName + '_ovsdb_idl_init(struct ovsdb_idl* idl){\n'
-            for (ovsdbRow, ovsdbCol) in self.getOvsdbTableColumnsForTable(tableName):
-                tableOvsdbGetString += 'ovsdb_idl_add_column(idl, &ovsrec_' + ovsdbRow + '_col_' + ovsdbCol + ');\n'
-            tableOvsdbGetString += '}\n\n'
-            for idx in indexes:
-                dbIdx = self.jsonData[tableName]['Indexes'][idx['name']]
-                idxTable = dbIdx['OvsTable']
-                idxType = self.getObjTypeString(idx)
-                if idx['name'] in self.generatedSymbols:
-                    continue
-                if not idxTable:
-                    tableOvsdbGetString += 'void ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
-                    if idxType == 'OctetString':
-                        tableOvsdbGetString += 'char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len) {\n'
-                        if dbIdx['CustomFunction']:
-                            tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = \'\\0\';\n'
-                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr_len = 0;\n'
-                    elif idxType == 'ObjectIdentifier':
-                        tableOvsdbGetString += 'oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len) {\n'
-                        if dbIdx['CustomFunction']:
-                            tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (oid)NULL;\n'
-                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr_len = 0;\n'
-                    else:
-                        tableOvsdbGetString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr) {\n'
-                        if dbIdx['CustomFunction']:
-                            tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + ', ' + idx['name'] + '_val_ptr);\n'
-                            self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, ' + self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n\n'
-                        else:
-                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[idxType] + ')NULL;\n'
-                    tableOvsdbGetString += '}\n\n'
-                    self.generatedSymbols[idx['name']] = 1
-                elif idxTable != rootDbTable:
-                    tableOvsdbGetString += 'void ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row, '
-                    if idxType == 'OctetString':
-                        tableOvsdbGetString += 'char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len) {\n'
-                        if dbIdx['CustomFunction']:
-                            tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idxTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row, char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += 'char *temp = NULL;\n'
-                            if dbIdx['Type']['Key']:
-                                if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['KeyType']
-                                    keyValue = dbIdx['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
-                            else:
-                                tableOvsdbGetString += 'temp = (char*)'+idxTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
-                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr_len = temp != NULL ? strlen(temp) : 0;\n'
-                            tableOvsdbGetString += 'memcpy(' + idx['name'] + '_val_ptr' + ', temp, *' + idx['name'] + '_val_ptr_len);\n'
-                    elif idxType == 'ObjectIdentifier':
-                        tableOvsdbGetString += 'oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len) {\n'
-                        if dbIdx['CustomFunction']:
-                            tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idxTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row, oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += 'char *temp = NULL;\n'
-                            if dbIdx['Type']['Key']:
-                                if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['KeyType']
-                                    keyValue = dbIdx['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
-                            else:
-                                tableOvsdbGetString += 'temp = (char*)'+idxTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
-                            tableOvsdbGetString += 'oid temp_oid[MAX_OID_LEN] = {0};\n'
-                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
-                            tableOvsdbGetString += 'if (temp != NULL) {\n'
-                            tableOvsdbGetString += 'snmp_parse_oid(temp, temp_oid, ' + idx['name'] + '_val_ptr_len);\n'
-                            tableOvsdbGetString += '}\n'
-                            tableOvsdbGetString += 'memcpy(' + idx['name'] + '_val_ptr, temp_oid, *' + idx['name'] + '_val_ptr_len);\n'
-                    else:
-                        tableOvsdbGetString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr) {\n'
-                        if dbIdx['CustomFunction']:
-                            tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idxTable + '_row, ' + idx['name'] + '_val_ptr);\n'
-                            self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row, ' + self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n\n'
-                        else:
-                            if dbIdx['Type']['Key']:
-                                if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['KeyType']
-                                    keyValue = dbIdx['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += '*'+idx['name']+'_val_ptr = ('+self.ctypeClasses[idxType]+')'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + idxTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+idxTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += '*'+idx['name']+'_val_ptr = ('+self.ctypeClasses[idxType]+')'+idxTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'char *temp = (char*)'
-                                    tableOvsdbGetString += 'smap_get(&' + idxTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
-                                    tableOvsdbGetString += 'if(temp == NULL) {\n'
-                                    tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = 0;\n'
-                                    tableOvsdbGetString += '}\n'
-                                    tableOvsdbGetString += 'else {\n'
-                                    tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[idxType] + ')atoi(temp);\n'
-                                    tableOvsdbGetString += '}\n'
-                            else:
-                                tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[idxType] + ')*('
-                                tableOvsdbGetString += idxTable + '_row->' + dbIdx['OvsColumn'] + ');\n'
-                    tableOvsdbGetString += '}\n\n'
-                    self.generatedSymbols[idx['name']] = 1
-                else:
-                    tableOvsdbGetString += 'void ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
-                    if idxType == 'OctetString':
-                        tableOvsdbGetString += 'char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len) {\n'
-                        if dbIdx['CustomFunction']:
-                            tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += 'char *temp = NULL;\n'
-                            if dbIdx['Type']['Key']:
-                                if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['KeyType']
-                                    keyValue = dbIdx['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
-                            else:
-                                tableOvsdbGetString += 'temp = (char*)' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
-                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr_len = temp != NULL ? strlen(temp) : 0;\n'
-                            tableOvsdbGetString += 'memcpy(' + idx['name'] + '_val_ptr' + ', temp, *' + idx['name'] + '_val_ptr_len);\n'
-                    elif idxType == 'ObjectIdentifier':
-                        tableOvsdbGetString += 'oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len) {\n'
-                        if dbIdx['CustomFunction']:
-                            tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idx['name'] + '_val_ptr, ' + idx['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += 'char *temp = NULL;\n'
-                            if dbIdx['Type']['Key']:
-                                if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['KeyType']
-                                    keyValue = dbIdx['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
-                            else:
-                                tableOvsdbGetString += 'temp = (char*)' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ';\n'
-                            tableOvsdbGetString += 'oid temp_oid[MAX_OID_LEN] = {0};\n'
-                            tableOvsdbGetString += '*' + idx['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
-                            tableOvsdbGetString += 'if (temp != NULL) {\n'
-                            tableOvsdbGetString += 'snmp_parse_oid(temp, temp_oid, ' + idx['name'] + '_val_ptr_len);\n'
-                            tableOvsdbGetString += '}\n'
-                            tableOvsdbGetString += 'memcpy(' + idx['name'] + '_val_ptr, temp_oid, *' + idx['name'] + '_val_ptr_len);\n'
-                    else:
-                        tableOvsdbGetString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr) {\n'
-                        if dbIdx['CustomFunction']:
-                            tableOvsdbGetString += dbIdx['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + idx['name'] + '_val_ptr);\n'
-                            self.customFileHeaderString += 'void ' + dbIdx['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, ' + self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n\n'
-                        else:
-                            if dbIdx['Type']['Key']:
-                                if type(dbIdx['Type']['Key']) == dict:
-                                    keyType = dbIdx['Type']['Key']['KeyType']
-                                    keyValue = dbIdx['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += '*'+idx['name']+'_val_ptr = ('+self.ctypeClasses[idxType]+')'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbIdx['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbIdx['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += '*'+idx['name']+'_val_ptr = ('+self.ctypeClasses[idxType]+')'+rootDbTable+'_row->value_'+dbIdx['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'char *temp = (char*)'
-                                    tableOvsdbGetString += 'smap_get(&' + rootDbTable + '_row->' + dbIdx['OvsColumn'] + ', "' + dbIdx['Type']['Key'] + '");\n'
-                                    tableOvsdbGetString += 'if(temp == NULL) {\n'
-                                    tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = 0;\n'
-                                    tableOvsdbGetString += '}\n'
-                                    tableOvsdbGetString += 'else {\n'
-                                    tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[idxType] + ')atoi(temp);\n'
-                                    tableOvsdbGetString += '}\n'
-                            else:
-                                tableOvsdbGetString += '*' + idx['name'] + '_val_ptr = (' + self.ctypeClasses[idxType] + ')*('
-                                tableOvsdbGetString += rootDbTable + '_row->' + dbIdx['OvsColumn'] + ');\n'
-                    tableOvsdbGetString += '}\n\n'
-                    self.generatedSymbols[idx['name']] = 1
-            tableOvsdbGetString += '\n'
-            for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in [idx['name'] for idx in indexes] or col['name'] in self.generatedSymbols:
-                    continue
-                dbCol = self.jsonData[tableName]['Columns'][col['name']]
-                colTable = dbCol['OvsTable']
-                colType = self.getObjTypeString(col)
-                if not colTable:
-                    tableOvsdbGetString += 'void ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
-                    if colType == 'OctetString':
-                        tableOvsdbGetString += 'char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len) {\n'
-                        if dbCol['CustomFunction']:
-                            tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + col['name'] + '_val_ptr, ' + col['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += '*' + col['name'] + '_val_ptr = \'\\0\';\n'
-                            tableOvsdbGetString += '*' + col['name'] + '_val_ptr_len = 0;\n'
-                    elif colType == 'ObjectIdentifier':
-                        tableOvsdbGetString += 'oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len) {\n'
-                        if dbCol['CustomFunction']:
-                            tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + col['name'] + '_val_ptr, ' + col['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (oid)NULL;\n'
-                            tableOvsdbGetString += '*' + col['name'] + '_val_ptr_len = 0;\n'
-                    else:
-                        tableOvsdbGetString += self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr) {\n'
-                        if dbCol['CustomFunction']:
-                            tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + col['name'] + '_val_ptr);\n'
-                            self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, ' + self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n\n'
-                        else:
-                            tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')NULL;\n'
-                    tableOvsdbGetString += '\n'
-                    tableOvsdbGetString += '}\n\n'
-                    self.generatedSymbols[col['name']] = 1
-                elif colTable != rootDbTable:
-                    tableOvsdbGetString += 'void ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row, '
-                    if colType == 'OctetString':
-                        tableOvsdbGetString += 'char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len) {\n'
-                        if dbCol['CustomFunction']:
-                            tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + colTable + '_row, ' + col['name'] + '_val_ptr, ' + col['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row, char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += 'char *temp = NULL;\n'
-                            if dbCol['Type']['Key']:
-                                if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['KeyType']
-                                    keyValue = dbCol['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
-                            else:
-                                tableOvsdbGetString += 'temp = (char*)'+colTable + '_row->' + dbCol['OvsColumn'] + ';\n'
-                            tableOvsdbGetString += '*' + col['name'] + '_val_ptr_len = temp != NULL ? strlen(temp) : 0;\n'
-                            tableOvsdbGetString += 'memcpy(' + col['name'] + '_val_ptr' + ', temp, *' + col['name'] + '_val_ptr_len);\n'
-                    elif colType == 'ObjectIdentifier':
-                        tableOvsdbGetString += 'oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len) {\n'
-                        if dbCol['CustomFunction']:
-                            tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + colTable + '_row, ' + col['name'] + '_val_ptr, ' + col['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row, oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += 'char *temp = NULL;\n'
-                            if dbCol['Type']['Key']:
-                                if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['KeyType']
-                                    keyValue = dbCol['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
-                            else:
-                                tableOvsdbGetString += 'temp = (char*)'+colTable + '_row->' + dbCol['OvsColumn'] + ';\n'
-                            tableOvsdbGetString += 'oid temp_oid[MAX_OID_LEN] = {0};\n'
-                            tableOvsdbGetString += '*' + col['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
-                            tableOvsdbGetString += 'if (temp != NULL) {\n'
-                            tableOvsdbGetString += 'snmp_parse_oid(temp, temp_oid, ' + col['name'] + '_val_ptr_len);\n'
-                            tableOvsdbGetString += '}\n'
-                            tableOvsdbGetString += 'memcpy(' + col['name'] + '_val_ptr, temp_oid, *' + col['name'] + '_val_ptr_len);\n'
-                    else:
-                        tableOvsdbGetString += self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr) {\n'
-                        if dbCol['CustomFunction']:
-                            tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + colTable + '_row, ' + col['name'] + '_val_ptr);\n'
-                            self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row, ' + self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n\n'
-                        else:
-                            if dbCol['Type']['Key']:
-                                if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['KeyType']
-                                    keyValue = dbCol['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + colTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+colTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')'+colTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'char *temp = (char*)'
-                                    tableOvsdbGetString += 'smap_get(&' + colTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
-                                    tableOvsdbGetString += 'if(temp == NULL) {\n'
-                                    tableOvsdbGetString += '*' + col['name'] + '_val_ptr = 0;\n'
-                                    tableOvsdbGetString += '}\n'
-                                    tableOvsdbGetString += 'else {\n'
-                                    tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')atoi(temp);\n'
-                                    tableOvsdbGetString += '}\n'
-                            else:
-                                tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')*('
-                                tableOvsdbGetString += colTable + '_row->' + dbCol['OvsColumn'] + ');\n'
-                    tableOvsdbGetString += '}\n\n'
-                    self.generatedSymbols[col['name']] = 1
-                else:
-                    tableOvsdbGetString += 'void ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
-                    if colType == 'OctetString':
-                        tableOvsdbGetString += 'char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len) {\n'
-                        if dbCol['CustomFunction']:
-                            tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + col['name'] + '_val_ptr, ' + col['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += 'char *temp = NULL;\n'
-                            if dbCol['Type']['Key']:
-                                if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['KeyType']
-                                    keyValue = dbCol['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
-                            else:
-                                tableOvsdbGetString += 'temp = (char*)'+rootDbTable + '_row->' + dbCol['OvsColumn'] + ';\n'
-                            tableOvsdbGetString += '*' + col['name'] + '_val_ptr_len = temp != NULL ? strlen(temp) : 0;\n'
-                            tableOvsdbGetString += 'memcpy(' + col['name'] + '_val_ptr' + ', temp, *' + col['name'] + '_val_ptr_len);\n'
-                    elif colType == 'ObjectIdentifier':
-                        tableOvsdbGetString += 'oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len) {\n'
-                        if dbCol['CustomFunction']:
-                            tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + col['name'] + '_val_ptr, ' + col['name'] + '_val_ptr_len);\n'
-                            self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n\n'
-                        else:
-                            tableOvsdbGetString += 'char *temp = NULL;\n'
-                            if dbCol['Type']['Key']:
-                                if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['KeyType']
-                                    keyValue = dbCol['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += 'temp = (char*)'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'temp = (char*)smap_get(&' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
-                            else:
-                                tableOvsdbGetString += 'temp = (char*)' +rootDbTable + '_row->' + dbCol['OvsColumn'] + ';\n'
-                            tableOvsdbGetString += 'oid temp_oid[MAX_OID_LEN] = {0};\n'
-                            tableOvsdbGetString += '*' + col['name'] + '_val_ptr_len = MAX_OID_LEN;\n'
-                            tableOvsdbGetString += 'if (temp != NULL) {\n'
-                            tableOvsdbGetString += 'snmp_parse_oid(temp, temp_oid, ' + col['name'] + '_val_ptr_len);\n'
-                            tableOvsdbGetString += '}\n'
-                            tableOvsdbGetString += 'memcpy(' + col['name'] + '_val_ptr, temp_oid, *' + col['name'] + '_val_ptr_len);\n'
-                    else:
-                        tableOvsdbGetString += self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr) {\n'
-                        if dbCol['CustomFunction']:
-                            tableOvsdbGetString += dbCol['CustomFunction'] + '(idl, ' + rootDbTable + '_row, ' + col['name'] + '_val_ptr);\n'
-                            self.customFileHeaderString += 'void ' + dbCol['CustomFunction'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, ' + self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n\n'
-                        else:
-                            if dbCol['Type']['Key']:
-                                if type(dbCol['Type']['Key']) == dict:
-                                    keyType = dbCol['Type']['Key']['KeyType']
-                                    keyValue = dbCol['Type']['Key']['KeyValue']
-                                    if keyType == 'str':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if(strcmp("'+keyValue+'", '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) == 0) {\n'
-                                        tableOvsdbGetString += '*'+col['name'] +'_val_ptr = ('+self.ctypeClasses[colType]+')'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                    elif keyType == 'int':
-                                        tableOvsdbGetString += 'for (int i = 0; i < ' + rootDbTable+'_row->n_'+dbCol['OvsColumn']+'; i++) {\n'
-                                        tableOvsdbGetString += 'if('+keyValue+' == '+rootDbTable+'_row->key_'+dbCol['OvsColumn']+'[i]) {\n'
-                                        tableOvsdbGetString += '*'+col['name'] +'_val_ptr = ('+self.ctypeClasses[colType]+')'+rootDbTable+'_row->value_'+dbCol['OvsColumn']+'[i];\n'
-                                        tableOvsdbGetString += '}\n'
-                                        tableOvsdbGetString += '}\n'
-                                else:
-                                    tableOvsdbGetString += 'char *temp = (char*)'
-                                    tableOvsdbGetString += 'smap_get(&' + rootDbTable + '_row->' + dbCol['OvsColumn'] + ', "' + dbCol['Type']['Key'] + '");\n'
-                                    tableOvsdbGetString += 'if(temp == NULL) {\n'
-                                    tableOvsdbGetString += '*' + col['name'] + '_val_ptr = 0;\n'
-                                    tableOvsdbGetString += '}\n'
-                                    tableOvsdbGetString += 'else {\n'
-                                    tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')atoi(temp);\n'
-                                    tableOvsdbGetString += '}\n'
-                            else:
-                                tableOvsdbGetString += '*' + col['name'] + '_val_ptr = (' + self.ctypeClasses[colType] + ')*('
-                                tableOvsdbGetString += rootDbTable + '_row->' + dbCol['OvsColumn'] + ');\n'
-                    tableOvsdbGetString += '}\n\n'
-                    self.generatedSymbols[col['name']] = 1
-            self.fileWrite(fileName=tableName + '_ovsdb_get.c',data=tableOvsdbGetString)
+            self.generateTableEnumsDotHFile(tableName)
 
-            tableOvsdbGetHeaderString = '#ifndef ' + tableName.upper() + '_OVSDB_GET_H\n'
-            tableOvsdbGetHeaderString += '#define ' + tableName.upper() + '_OVSDB_GET_H\n\n'
-            tableOvsdbGetHeaderString += """#include <net-snmp/net-snmp-config.h>
-#include <net-snmp/net-snmp-features.h>
-#include <net-snmp/net-snmp-includes.h>
-#include <net-snmp/agent/net-snmp-agent-includes.h>
-"""
-            tableOvsdbGetHeaderString += '#include "vswitch-idl.h"\n'
-            tableOvsdbGetHeaderString += '#include "ovsdb-idl.h"\n\n'
-            tableOvsdbGetHeaderString += 'void ' + tableName + '_ovsdb_idl_init(struct ovsdb_idl *idl);\n'
-            for idx in indexes:
-                dbIdx = self.jsonData[tableName]['Indexes'][idx['name']]
-                idxTable = dbIdx['OvsTable']
-                idxType = self.getObjTypeString(idx)
-                if not idxTable:
-                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
-                    if idxType == 'OctetString':
-                        tableOvsdbGetHeaderString += 'char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
-                    elif idxType == 'ObjectIdentifier':
-                        tableOvsdbGetHeaderString += 'oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
-                    else:
-                        tableOvsdbGetHeaderString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n'
-                elif idxTable != rootDbTable:
-                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + idxTable + ' *' + idxTable + '_row, '
-                    if idxType == 'OctetString':
-                        tableOvsdbGetHeaderString += 'char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
-                    elif idxType == 'ObjectIdentifier':
-                        tableOvsdbGetHeaderString += 'oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
-                    else:
-                        tableOvsdbGetHeaderString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n'
-                else:
-                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + idx['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
-                    if idxType == 'OctetString':
-                        tableOvsdbGetHeaderString += 'char *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
-                    elif idxType == 'ObjectIdentifier':
-                        tableOvsdbGetHeaderString += 'oid *' + idx['name'] + '_val_ptr, size_t* ' + idx['name'] + '_val_ptr_len);\n'
-                    else:
-                        tableOvsdbGetHeaderString += self.ctypeClasses[idxType] + ' *' + idx['name'] + '_val_ptr);\n'
-            tableOvsdbGetHeaderString += '\n'
-            for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in [idx['name'] for idx in indexes]:
-                    continue
-                dbCol = self.jsonData[tableName]['Columns'][col['name']]
-                colTable = dbCol['OvsTable']
-                colType = self.getObjTypeString(col)
-                if not colTable:
-                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
-                    if colType == 'OctetString':
-                        tableOvsdbGetHeaderString += 'char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
-                    elif colType == 'ObjectIdentifier':
-                        tableOvsdbGetHeaderString += 'oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
-                    else:
-                        tableOvsdbGetHeaderString += self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n'
-                elif colTable != rootDbTable:
-                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, const struct ovsrec_' + colTable + ' *' + colTable + '_row, '
-                    if colType == 'OctetString':
-                        tableOvsdbGetHeaderString += 'char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
-                    elif colType == 'ObjectIdentifier':
-                        tableOvsdbGetHeaderString += 'oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
-                    else:
-                        tableOvsdbGetHeaderString += self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n'
-                else:
-                    tableOvsdbGetHeaderString += 'void ovsdb_get_' + col['name'] + '(struct ovsdb_idl *idl, const struct ovsrec_' + rootDbTable + ' *' + rootDbTable + '_row, '
-                    if colType == 'OctetString':
-                        tableOvsdbGetHeaderString += 'char *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
-                    elif colType == 'ObjectIdentifier':
-                        tableOvsdbGetHeaderString += 'oid *' + col['name'] + '_val_ptr, size_t* ' + col['name'] + '_val_ptr_len);\n'
-                    else:
-                        tableOvsdbGetHeaderString += self.ctypeClasses[colType] + ' *' + col['name'] + '_val_ptr);\n'
-            tableOvsdbGetHeaderString += '#endif'
-            self.fileWrite(fileName=tableName + '_ovsdb_get.h',data=tableOvsdbGetHeaderString)
-
-            tableEnumsHeaderString = '#ifndef ' + tableName.upper() + '_ENUMS_H\n'
-            tableEnumsHeaderString += '#define ' + tableName.upper() + '_ENUMS_H\n\n'
-            for idx in indexes:
-                if idx['name'] in self.enumSymbols:
-                    for x in self.enumSymbols[idx['name']]:
-                        name, val = x
-                        tableEnumsHeaderString += '#define D_' + idx['name'].upper() + '_' + name.upper() + ' ' + str(val) + '\n'
-                    tableEnumsHeaderString += '\n'
-
-            for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in self.enumSymbols:
-                    for x in self.enumSymbols[col['name']]:
-                        name, val = x
-                        tableEnumsHeaderString += '#define D_' + col['name'].upper() + '_' + name.upper() + ' ' + str(val) + '\n'
-                    tableEnumsHeaderString += '\n'
-
-            tableEnumsHeaderString += '#endif\n\n'
-            self.fileWrite(fileName=tableName + '_enums.h',data=tableEnumsHeaderString)
-
-            tableInterfaceString = """#include <net-snmp/net-snmp-config.h>
-#include <net-snmp/net-snmp-features.h>
-#include <net-snmp/net-snmp-includes.h>
-#include <net-snmp/agent/net-snmp-agent-includes.h>
-#include <net-snmp/agent/table_container.h>
-#include <net-snmp/library/container.h>
-"""
-            tableInterfaceString += '#include "' + tableName + '.h"\n'
-            tableInterfaceString += '#include "' + tableName + '_interface.h"\n\n'
-            tableInterfaceString += 'netsnmp_feature_require(baby_steps)\n'
-            tableInterfaceString += 'netsnmp_feature_require(row_merge)\n'
-            tableInterfaceString += 'netsnmp_feature_require(check_all_requests_error)\n\n'
-            tableInterfaceString += 'typedef struct ' + tableName + '_interface_ctx_s {\n'
-            tableInterfaceString += 'netsnmp_container *container;\n'
-            tableInterfaceString += 'netsnmp_cache *cache;\n'
-            tableInterfaceString += tableName + '_registration *user_ctx;\n'
-            tableInterfaceString += 'netsnmp_table_registration_info tbl_info;\n'
-            tableInterfaceString += 'netsnmp_baby_steps_access_methods access_multiplexer;\n'
-            tableInterfaceString += '} ' + tableName + '_interface_ctx;\n\n'
-            tableInterfaceString += 'static ' + tableName + '_interface_ctx ' + tableName + '_if_ctx;\n'
-            tableInterfaceString += 'static void _' + tableName + '_container_init(' + tableName + '_interface_ctx *if_ctx);\n'
-            tableInterfaceString += 'static void _' + tableName + '_container_shutdown(' + tableName + '_interface_ctx *if_ctx);\n\n'
-            tableInterfaceString += 'netsnmp_container *' + tableName + '_container_get(void) {\n'
-            tableInterfaceString += 'return ' + tableName + '_if_ctx.container;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += tableName + '_registration *' + tableName + '_registration_get(void) {\n'
-            tableInterfaceString += 'return ' + tableName + '_if_ctx.user_ctx;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += tableName + '_registration *' + tableName + '_registration_set(' + tableName + '_registration *newreg) {\n'
-            tableInterfaceString += tableName + '_registration *old = ' + tableName + '_if_ctx.user_ctx;\n'
-            tableInterfaceString += tableName + '_if_ctx.user_ctx = newreg;\n'
-            tableInterfaceString += 'return old;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'int ' + tableName + '_container_size(void) {\n'
-            tableInterfaceString += 'return CONTAINER_SIZE(' + tableName + '_if_ctx.container);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'static Netsnmp_Node_Handler _mfd_' + tableName + '_pre_request;\n'
-            tableInterfaceString += 'static Netsnmp_Node_Handler _mfd_' + tableName + '_post_request;\n'
-            tableInterfaceString += 'static Netsnmp_Node_Handler _mfd_' + tableName + '_object_lookup;\n'
-            tableInterfaceString += 'static Netsnmp_Node_Handler _mfd_' + tableName + '_get_values;\n\n'
-            tableInterfaceString += 'void _' + tableName + '_initialize_interface(' + tableName + '_registration *reg_ptr, u_long flags) {\n'
-            tableInterfaceString += 'netsnmp_baby_steps_access_methods *access_multiplexer = &' + tableName + '_if_ctx.access_multiplexer;\n'
-            tableInterfaceString += 'netsnmp_table_registration_info *tbl_info = &' + tableName + '_if_ctx.tbl_info;\n'
-            tableInterfaceString += 'netsnmp_handler_registration *reginfo;\n'
-            tableInterfaceString += 'netsnmp_mib_handler *handler;\n'
-            tableInterfaceString += 'int mfd_modes = 0;\n\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_' + tableName + '_initialize_interface","called\\n"));\n\n'
-            tableInterfaceString += 'netsnmp_table_helper_add_indexes(tbl_info'
-            for idx in indexes:
-                tableInterfaceString += ', ' + self.netsnmpTypes[self.getObjTypeString(idx)]
-            tableInterfaceString += ', 0);\n\n'
-            tableInterfaceString += 'tbl_info->min_column = ' + tableName.upper() + '_MIN_COL;\n'
-            tableInterfaceString += 'tbl_info->max_column = ' + tableName.upper() + '_MAX_COL;\n'
-            tableInterfaceString += tableName + '_if_ctx.user_ctx = reg_ptr;\n'
-            tableInterfaceString += tableName + '_init_data(reg_ptr);\n'
-            tableInterfaceString += '_' + tableName + '_container_init(&' + tableName + '_if_ctx);\n'
-            tableInterfaceString += 'if ( NULL == ' + tableName + '_if_ctx.container) {\n'
-            tableInterfaceString += 'snmp_log(LOG_ERR, "could not initialize container for ' + tableName + '\\n");\n'
-            tableInterfaceString += 'return;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'access_multiplexer->object_lookup = _mfd_' + tableName + '_object_lookup;\n'
-            tableInterfaceString += 'access_multiplexer->get_values = _mfd_' + tableName + '_get_values;\n\n'
-            tableInterfaceString += 'access_multiplexer->pre_request = _mfd_' + tableName + '_pre_request;\n'
-            tableInterfaceString += 'access_multiplexer->post_request = _mfd_' + tableName + '_post_request;\n\n'
-            tableInterfaceString += 'DEBUGMSGTL(("' + tableName + ':init_' + tableName + '","Registering ' + tableName + ' as a mibs-for-dummies table.\\n"));\n\n'
-            tableInterfaceString += 'handler = netsnmp_baby_steps_access_multiplexer_get(access_multiplexer);\n'
-            tableInterfaceString += 'reginfo = netsnmp_handler_registration_create("' + tableName + '", handler, ' + tableName + '_oid, ' + tableName + '_oid_size, HANDLER_CAN_BABY_STEP | HANDLER_CAN_RONLY);\n\n'
-            tableInterfaceString += 'if (NULL == reginfo) {\n'
-            tableInterfaceString += 'snmp_log(LOG_ERR, "error registering table ' + tableName + '\\n");\n'
-            tableInterfaceString += 'return;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'reginfo->my_reg_void = &' + tableName + '_if_ctx;\n\n'
-            tableInterfaceString += 'if (access_multiplexer->object_lookup)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_OBJECT_LOOKUP;\n'
-            tableInterfaceString += 'if (access_multiplexer->pre_request)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_PRE_REQUEST;\n'
-            tableInterfaceString += 'if (access_multiplexer->post_request)\n'
-            tableInterfaceString += 'mfd_modes |= BABY_STEP_POST_REQUEST;\n\n'
-            #tableInterfaceString += 'if (access_multiplexer->set_values)\n'
-            #tableInterfaceString += 'mfd_modes |= BABY_STEP_SET_VALUES;\n'
-            #tableInterfaceString += 'if
-            #(access_multiplexer->irreversible_commit)\n'
-            #tableInterfaceString += 'mfd_modes |=
-            #BABY_STEP_IRREVERSIBLE_COMMIT;\n'
-            #tableInterfaceString += 'if
-            #(access_multiplexer->object_syntax_checks)\n'
-            #tableInterfaceString += 'mfd_modes |= BABY_STEP_CHECK_OBJECT;\n'
-            #tableInterfaceString += 'if (access_multiplexer->undo_setup)\n'
-            #tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_SETUP;\n'
-            #tableInterfaceString += 'if (access_multiplexer->undo_cleanup)\n'
-            #tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_CLEANUP;\n'
-            #tableInterfaceString += 'if (access_multiplexer->undo_sets)\n'
-            #tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_SETS;\n'
-            #tableInterfaceString += 'if(access_multiplexer->row_creation)\n'
-            #tableInterfaceString += 'mfd_modes |= BABY_STEP_ROW_CREATE;\n'
-            #tableInterfaceString +=
-            #'if(access_multiplexer->consistency_checks)\n'
-            #tableInterfaceString += 'mfd_modes |=
-            #BABY_STEP_CHECK_CONSISTENCY;\n'
-            #tableInterfaceString += 'if(access_multiplexer->commit)\n'
-            #tableInterfaceString += 'mfd_modes |= BABY_STEP_COMMIT;\n'
-            #tableInterfaceString += 'if(access_multiplexer->undo_commit)\n'
-            #tableInterfaceString += 'mfd_modes |= BABY_STEP_UNDO_COMMIT;\n\n'
-            tableInterfaceString += 'handler = netsnmp_baby_steps_handler_get(mfd_modes);\n'
-            tableInterfaceString += 'netsnmp_inject_handler(reginfo, handler);\n\n'
-            tableInterfaceString += 'handler = netsnmp_get_row_merge_handler(reginfo->rootoid_len + 2);\n'
-            tableInterfaceString += 'netsnmp_inject_handler(reginfo, handler);\n\n'
-            tableInterfaceString += 'handler = netsnmp_container_table_handler_get(tbl_info, ' + tableName + '_if_ctx.container, TABLE_CONTAINER_KEY_NETSNMP_INDEX);\n'
-            tableInterfaceString += 'netsnmp_inject_handler(reginfo, handler);\n\n'
-            tableInterfaceString += 'if(NULL != ' + tableName + '_if_ctx.cache) {\n'
-            tableInterfaceString += 'handler = netsnmp_cache_handler_get(' + tableName + '_if_ctx.cache);\n'
-            tableInterfaceString += 'netsnmp_inject_handler(reginfo, handler);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'netsnmp_register_table(reginfo, tbl_info);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'void _' + tableName + '_shutdown_interface(' + tableName + '_registration *reg_ptr) {\n'
-            tableInterfaceString += '_' + tableName + '_container_shutdown(&' + tableName + '_if_ctx);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'void ' + tableName + '_valid_columns_set(netsnmp_column_info *vc) {\n'
-            tableInterfaceString += tableName + '_if_ctx.tbl_info.valid_columns = vc;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'int ' + tableName + '_index_to_oid(netsnmp_index *oid_idx, ' + tableName + '_mib_index *mib_idx) {\n'
-            tableInterfaceString += 'int err = SNMP_ERR_NOERROR;\n'
-            for idx in indexes:
-                tableInterfaceString += 'netsnmp_variable_list var_' + idx['name'] + ';\n'
-            tableInterfaceString += '\n'
-            for index, idx in enumerate(indexes):
-                tableInterfaceString += 'memset( &var_' + idx['name'] + ', 0x00, sizeof(var_' + idx['name'] + '));\n'
-                tableInterfaceString += 'var_' + idx['name'] + '.type = ' + self.netsnmpTypes[self.getObjTypeString(idx)] + ';\n'
-                if index is not len(indexes) - 1:
-                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = &var_' + indexes[index + 1]['name'] + ';\n\n'
-                else:
-                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = NULL;\n\n'
-            tableInterfaceString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_index_to_oid","called\\n"));\n\n'
-            for idx in indexes:
-                idxType = self.getObjTypeString(idx)
-                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
-                    tableInterfaceString += 'snmp_set_var_value(&var_' + idx['name'] + ',&mib_idx->' + idx['name'] + ',mib_idx->' + idx['name'] + '_len * sizeof(mib_idx->' + idx['name'] + '[0]));\n'
-                else:
-                    tableInterfaceString += 'snmp_set_var_value(&var_' + idx['name'] + ', &mib_idx->' + idx['name'] + ', sizeof(mib_idx->' + idx['name'] + '));\n'
-            tableInterfaceString += 'err = build_oid_noalloc(oid_idx->oids, oid_idx->len, &oid_idx->len, NULL, 0, &var_' + indexes[0]['name'] + ');\n'
-            tableInterfaceString += 'if(err) {\n'
-            tableInterfaceString += 'snmp_log(LOG_ERR, "error %d converting index to oid\\n",err);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'snmp_reset_var_buffers(&var_' + indexes[0]['name'] + ');\n'
-            tableInterfaceString += 'return err;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'int ' + tableName + '_index_from_oid(netsnmp_index *oid_idx, ' + tableName + '_mib_index *mib_idx) {\n'
-            tableInterfaceString += 'int err = SNMP_ERR_NOERROR;\n'
-            for idx in indexes:
-                tableInterfaceString += 'netsnmp_variable_list var_' + idx['name'] + ';\n'
-            tableInterfaceString += '\n'
-            for index, idx in enumerate(indexes):
-                tableInterfaceString += 'memset(&var_' + idx['name'] + ', 0x00, sizeof(var_' + idx['name'] + '));\n'
-                tableInterfaceString += 'var_' + idx['name'] + '.type = ' + self.netsnmpTypes[self.getObjTypeString(idx)] + ';\n'
-                if index is not len(indexes) - 1:
-                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = &var_' + indexes[index + 1]['name'] + ';\n\n'
-                else:
-                    tableInterfaceString += 'var_' + idx['name'] + '.next_variable = NULL;\n\n'
-            tableInterfaceString += 'DEBUGMSGTL(("verbose:' + tableName + ':' + tableName + '_index_from_oid","called\\n"));\n\n'
-            tableInterfaceString += 'err = parse_oid_indexes( oid_idx->oids, oid_idx->len, &var_' + indexes[0]['name'] + ');\n'
-            tableInterfaceString += 'if (err == SNMP_ERR_NOERROR) {\n'
-            for idx in indexes:
-                idxType = self.getObjTypeString(idx)
-                if idxType == 'OctetString' or idxType == 'ObjectIdentifier':
-                    tableInterfaceString += 'if (var_' + idx['name'] + '.val_len > sizeof(mib_idx->' + idx['name'] + ')) {\n'
-                    tableInterfaceString += 'err = SNMP_ERR_GENERR;\n'
-                    tableInterfaceString += '}\n'
-                    tableInterfaceString += 'else {\n'
-                    tableInterfaceString += 'memcpy(mib_idx->' + idx['name'] + ', var_' + idx['name'] + '.val.string, var_' + idx['name'] + '.val_len);\n'
-                    tableInterfaceString += 'mib_idx->' + idx['name'] + '_len = var_' + idx['name'] + '.val_len/ sizeof(mib_idx->' + idx['name'] + '[0]);\n'
-                    tableInterfaceString += '}\n'
-                else:
-                    tableInterfaceString += 'mib_idx->' + idx['name'] + ' = *((' + self.ctypeClasses[self.getObjTypeString(idx)] + '*)var_' + idx['name'] + '.val.string);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'snmp_reset_var_buffers(&var_' + indexes[0]['name'] + ');\n'
-            tableInterfaceString += 'return err;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += tableName + '_rowreq_ctx *' + tableName + '_allocate_rowreq_ctx(void *user_init_ctx) {\n'
-            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = SNMP_MALLOC_TYPEDEF(' + tableName + '_rowreq_ctx);\n\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':' + tableName + '_allocate_rowreq_ctx","called\\n"));\n\n'
-            tableInterfaceString += 'if(NULL == rowreq_ctx) {\n'
-            tableInterfaceString += 'snmp_log(LOG_ERR, "Could not allocate memory for a ' + tableName + '_rowreq_ctx.\\n" );\n'
-            tableInterfaceString += 'return NULL;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'rowreq_ctx->oid_idx.oids = rowreq_ctx->oid_tmp;\n'
-            tableInterfaceString += 'rowreq_ctx->' + tableName + '_data_list = NULL;\n'
-            tableInterfaceString += 'if(!(rowreq_ctx->rowreq_flags & MFD_ROW_DATA_FROM_USER)) {\n'
-            tableInterfaceString += 'if(SNMPERR_SUCCESS != ' + tableName + '_rowreq_ctx_init(rowreq_ctx, user_init_ctx)) {\n'
-            tableInterfaceString += tableName + '_release_rowreq_ctx(rowreq_ctx);\n'
-            tableInterfaceString += 'rowreq_ctx = NULL;\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += 'return rowreq_ctx;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'void ' + tableName + '_release_rowreq_ctx(' + tableName + '_rowreq_ctx *rowreq_ctx) {\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':' + tableName + '_release_rowreq_ctx","called\\n"));\n\n'
-            tableInterfaceString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
-            tableInterfaceString += tableName + '_rowreq_ctx_cleanup(rowreq_ctx);\n'
-            tableInterfaceString += 'if (rowreq_ctx->oid_idx.oids != rowreq_ctx->oid_tmp) {\n'
-            tableInterfaceString += 'free(rowreq_ctx->oid_idx.oids);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'SNMP_FREE(rowreq_ctx);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'static int _mfd_' + tableName + '_pre_request(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *agtreq_info, netsnmp_request_info *requests) {\n'
-            tableInterfaceString += 'int rc;\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_mfd_' + tableName + '_pre_request","called\\n"));\n\n'
-            tableInterfaceString += 'if (1 != netsnmp_row_merge_status_first(reginfo, agtreq_info)) {\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + '","skipping additional pre_request\\n"));\n'
-            tableInterfaceString += 'return SNMP_ERR_NOERROR;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'rc = ' + tableName + '_pre_request(' + tableName + '_if_ctx.user_ctx);\n'
-            tableInterfaceString += 'if(MFD_SUCCESS != rc) {\n'
-            tableInterfaceString += 'DEBUGMSGTL(("' + tableName + '","error %d from ' + tableName + '_pre_requests\\n",rc));\n'
-            tableInterfaceString += 'netsnmp_request_set_error_all(requests, SNMP_VALIDATE_ERR(rc));\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'return SNMP_ERR_NOERROR;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'static int _mfd_' + tableName + '_post_request(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *agtreq_info, netsnmp_request_info *requests) {\n'
-            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = (' + tableName + '_rowreq_ctx *)netsnmp_container_table_row_extract(requests);\n'
-            tableInterfaceString += 'int rc, packet_rc;\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_mfd_' + tableName + '_post_request","called\\n"));\n\n'
-            tableInterfaceString += 'if(rowreq_ctx && (rowreq_ctx->rowreq_flags & MFD_ROW_DELETED)) {\n'
-            tableInterfaceString += tableName + '_release_rowreq_ctx(rowreq_ctx);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'if (1 != netsnmp_row_merge_status_last(reginfo, agtreq_info)) {\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + '","waiting for last post_request\\n"));\n'
-            tableInterfaceString += 'return SNMP_ERR_NOERROR;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'packet_rc = netsnmp_check_all_requests_error(agtreq_info->asp, 0);\n'
-            tableInterfaceString += 'rc = ' + tableName + '_post_request(' + tableName + '_if_ctx.user_ctx, packet_rc);\n'
-            tableInterfaceString += 'if(MFD_SUCCESS != rc) {\n'
-            tableInterfaceString += 'DEBUGMSGTL(("' + tableName + '","error %d from ' + tableName + '_post_request\\n",rc));\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += 'return SNMP_ERR_NOERROR;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'static int _mfd_' + tableName + '_object_lookup(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *agtreq_info, netsnmp_request_info *requests) {\n'
-            tableInterfaceString += 'int rc = SNMP_ERR_NOERROR;\n'
-            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = (' + tableName + '_rowreq_ctx*)netsnmp_container_table_row_extract(requests);\n\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_mfd_' + tableName + '_object_lookup","called\\n"));\n\n'
-            tableInterfaceString += 'if(NULL == rowreq_ctx) {\n'
-            tableInterfaceString += 'rc = SNMP_ERR_NOCREATION;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'if(MFD_SUCCESS != rc) {\n'
-            tableInterfaceString += 'netsnmp_request_set_error_all(requests, rc);\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += 'else {\n'
-            tableInterfaceString += tableName + '_row_prep(rowreq_ctx);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'return SNMP_VALIDATE_ERR(rc);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'NETSNMP_STATIC_INLINE int _' + tableName + '_get_column(' + tableName + '_rowreq_ctx *rowreq_ctx, netsnmp_variable_list *var, int column) {\n'
-            tableInterfaceString += 'int rc = SNMPERR_SUCCESS;\n\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_mfd_' + tableName + '_get_column","called for %d\\n",column));\n\n'
-            tableInterfaceString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
-            tableInterfaceString += 'switch(column) {\n'
-            for idx in indexes:
-                if idx['maxaccess'] == 'notaccessible':
-                    continue
-                tableInterfaceString += 'case COLUMN_' + idx['name'].upper() + ':{\n'
-                idxType = self.getObjTypeString(idx)
-                if idxType == 'Bits':
-                    tableInterfaceString += 'u_long mask = (u_long)0xff << ((sizeof(char)-1)*8);\n'
-                    tableInterfaceString += 'int idx = 0;\n'
-                    tableInterfaceString += 'var->type =  ASN_OCTET_STR;\n'
-                    tableInterfaceString += 'rc = ' + idx['name'] + '_get(rowreq_ctx, (u_long *)var->val.string);\n'
-                    tableInterfaceString += 'var->val_len = 0;\n'
-                    tableInterfaceString += 'while( 0 != mask) {\n'
-                    tableInterfaceString += '++idx;\n'
-                    tableInterfaceString += 'if(*((u_long*)var->val.string)&mask)\n'
-                    tableInterfaceString += 'var->val_len = idx;\n'
-                    tableInterfaceString += 'mask = mask >> 8;\n'
-                    tableInterfaceString += '}\n'
-                    tableInterfaceString += '}\n'
-                elif idxType == 'OctetString':
-                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(idx)] + ';\n'
-                    tableInterfaceString += 'rc = ' + idx['name'] + '_get(rowreq_ctx, (char **)&var->val.string, &var->val_len);\n'
-                    tableInterfaceString += '}\n'
-                elif idxType == 'ObjectIdentifier':
-                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(idx)] + ';\n'
-                    tableInterfaceString += 'rc = ' + idx['name'] + '_get(rowreq_ctx, (oid **)&var->val.string, &var->val_len);\n'
-                    tableInterfaceString += '}\n'
-                else:
-                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(idx)] + ';\n'
-                    tableInterfaceString += 'var->val_len = sizeof(' + self.ctypeClasses[idxType] + ');\n'
-                    tableInterfaceString += 'rc = ' + idx['name'] + '_get(rowreq_ctx, (' + self.ctypeClasses[idxType] + '*)var->val.string);\n'
-                    tableInterfaceString += '}\n'
-                tableInterfaceString += 'break;\n'
-            for col in self.tableRows[self.tables[tableName]['row']]['columns']:
-                if col['name'] in self.tableRows[self.tables[tableName]['row']]['index'] or col['maxaccess'] == 'notaccessible':
-                    continue
-                tableInterfaceString += 'case COLUMN_' + col['name'].upper() + ':{\n'
-                colType = self.getObjTypeString(col)
-                if colType == 'Bits':
-                    tableInterfaceString += 'u_long mask = (u_long)0xff << ((sizeof(char)-1)*8);\n'
-                    tableInterfaceString += 'int idx = 0;\n'
-                    tableInterfaceString += 'var->type =  ASN_OCTET_STR;\n'
-                    tableInterfaceString += 'rc = ' + col['name'] + '_get(rowreq_ctx, (u_long *)var->val.string);\n'
-                    tableInterfaceString += 'var->val_len = 0;\n'
-                    tableInterfaceString += 'while( 0 != mask) {\n'
-                    tableInterfaceString += '++idx;\n'
-                    tableInterfaceString += 'if(*((u_long*)var->val.string)&mask)\n'
-                    tableInterfaceString += 'var->val_len = idx;\n'
-                    tableInterfaceString += 'mask = mask >> 8;\n'
-                    tableInterfaceString += '}\n'
-                    tableInterfaceString += '}\n'
-                elif colType == 'OctetString':
-                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(col)] + ';\n'
-                    tableInterfaceString += 'rc = ' + col['name'] + '_get(rowreq_ctx, (char **)&var->val.string, &var->val_len);\n'
-                    tableInterfaceString += '}\n'
-                elif colType == 'ObjectIdentifier':
-                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(col)] + ';\n'
-                    tableInterfaceString += 'rc = ' + col['name'] + '_get(rowreq_ctx, (oid **)&var->val.string, &var->val_len);\n'
-                    tableInterfaceString += '}\n'
-                else:
-                    tableInterfaceString += 'var->type = ' + self.netsnmpTypes[self.getObjTypeString(col)] + ';\n'
-                    tableInterfaceString += 'var->val_len = sizeof(' + self.ctypeClasses[colType] + ');\n'
-                    tableInterfaceString += 'rc = ' + col['name'] + '_get(rowreq_ctx, (' + self.ctypeClasses[colType] + '*)var->val.string);\n'
-                    tableInterfaceString += '}\n'
-                tableInterfaceString += 'break;\n'
-            tableInterfaceString += 'default:\n'
-            tableInterfaceString += 'if(' + tableName.upper() + '_MIN_COL <= column && column <= ' + tableName.upper() + '_MAX_COL) {\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_mfd_' + tableName + '_get_column","assume column %d is reserved\\n",column));\n'
-            tableInterfaceString  += 'rc = MFD_SKIP;\n'
-            tableInterfaceString += '} else {\n'
-            tableInterfaceString += 'snmp_log(LOG_ERR, "unknown column %d in _' + tableName + '_get_column\\n",column);\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += 'break;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'return rc;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'int _mfd_' + tableName + '_get_values(netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *agtreq_info, netsnmp_request_info *requests) {\n'
-            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx = (' + tableName + '_rowreq_ctx*)netsnmp_container_table_row_extract(requests);\n'
-            tableInterfaceString += 'netsnmp_table_request_info *tri;\n'
-            tableInterfaceString += 'u_char *old_string;\n'
-            tableInterfaceString += 'void (*dataFreeHook)(void*);\n'
-            tableInterfaceString += 'int rc;\n\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_mfd_' + tableName + '_get_values","called\\n"));\n\n'
-            tableInterfaceString += 'netsnmp_assert(NULL != rowreq_ctx);\n\n'
-            tableInterfaceString += 'for(;requests;requests = requests->next) {\n'
-            tableInterfaceString += 'old_string = requests->requestvb->val.string;\n'
-            tableInterfaceString += 'dataFreeHook = requests->requestvb->dataFreeHook;\n'
-            tableInterfaceString += 'if (NULL == requests->requestvb->val.string) {\n'
-            tableInterfaceString += 'requests->requestvb->val.string =requests->requestvb->buf;\n'
-            tableInterfaceString += 'requests->requestvb->val_len = sizeof(requests->requestvb->buf);\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += 'else if (requests->requestvb->buf == requests->requestvb->val.string) {\n'
-            tableInterfaceString += 'if(requests->requestvb->val_len != sizeof(requests->requestvb->buf)){\n'
-            tableInterfaceString += 'requests->requestvb->val_len = sizeof(requests->requestvb->buf);\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'tri = netsnmp_extract_table_info(requests);\n'
-            tableInterfaceString += 'if(NULL == tri) {\n'
-            tableInterfaceString += 'continue;\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += 'rc = _' + tableName + '_get_column(rowreq_ctx, requests->requestvb, tri->colnum);\n'
-            tableInterfaceString += 'if(rc) {\n'
-            tableInterfaceString += 'if(MFD_SKIP == rc) {\n'
-            tableInterfaceString += 'requests->requestvb->type = SNMP_NOSUCHINSTANCE;\n'
-            tableInterfaceString += 'rc = SNMP_ERR_NOERROR;\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += 'else if (NULL == requests->requestvb->val.string) {\n'
-            tableInterfaceString += 'snmp_log(LOG_ERR, "NULL varbind data pointer!\\n");\n'
-            tableInterfaceString += 'rc = SNMP_ERR_GENERR;\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += 'if(rc) {\n'
-            tableInterfaceString += 'netsnmp_request_set_error(requests, SNMP_VALIDATE_ERR(rc));\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'if(old_string && (old_string != requests->requestvb->buf) && (requests->requestvb->val.string != old_string )) {\n'
-            tableInterfaceString += 'if(dataFreeHook) {\n'
-            tableInterfaceString += '(*dataFreeHook)(old_string);\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += 'else {\n'
-            tableInterfaceString += 'free(old_string);\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'return SNMP_ERR_NOERROR;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'static void _container_free(netsnmp_container *container);\n\n'
-            tableInterfaceString += 'static int _cache_load(netsnmp_cache *cache, void *vmagic) {\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_cache_load","called\\n"));\n\n'
-            tableInterfaceString += 'if((NULL == cache) || (NULL == cache->magic)) {\n'
-            tableInterfaceString += 'snmp_log(LOG_ERR, "invalid cache for ' + tableName + '_cache_load\\n");\n'
-            tableInterfaceString += 'return -1;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'netsnmp_assert((0 == cache->valid) || (1 == cache->expired));\n\n'
-            tableInterfaceString += 'return ' + tableName + '_container_load((netsnmp_container*)cache->magic);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'static void _cache_free(netsnmp_cache *cache, void *magic) {\n'
-            tableInterfaceString += 'netsnmp_container *container;\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_cache_free","called\\n"));\n\n'
-            tableInterfaceString += 'if((NULL == cache) || (NULL == cache->magic)) {\n'
-            tableInterfaceString += 'snmp_log(LOG_ERR,"invalid cache in ' + tableName + '_cache_free\\n");\n'
-            tableInterfaceString += 'return;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'container = (netsnmp_container*)cache->magic;\n'
-            tableInterfaceString += '_container_free(container);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'static void _container_item_free(' + tableName + '_rowreq_ctx *rowreq_ctx, void *context) {\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_container_item_free","called\\n"));\n\n'
-            tableInterfaceString += 'if(NULL == rowreq_ctx) {\n'
-            tableInterfaceString += 'return ;\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += tableName + '_release_rowreq_ctx(rowreq_ctx);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'static void _container_free(netsnmp_container *container) {\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_container_free","called\\n"));\n\n'
-            tableInterfaceString += 'if(NULL == container) {\n'
-            tableInterfaceString += 'snmp_log(LOG_ERR, "invalid container in ' + tableName + '_container_free\\n");\n'
-            tableInterfaceString += 'return ;\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += tableName + '_container_free(container);\n'
-            tableInterfaceString += 'CONTAINER_CLEAR(container, (netsnmp_container_obj_func *)_container_item_free, NULL);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'void _' + tableName + '_container_init(' + tableName + '_interface_ctx *if_ctx) {\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_' + tableName + '_container_init","called\\n"));\n\n'
-            tableInterfaceString += 'if_ctx->cache = netsnmp_cache_create(30, _cache_load, _cache_free, ' + tableName + '_oid, ' + tableName + '_oid_size);\n\n'
-            tableInterfaceString += 'if(NULL == if_ctx->cache) {\n'
-            tableInterfaceString += 'snmp_log(LOG_ERR,"error creating cache for ' + tableName + '\\n");\n'
-            tableInterfaceString += 'return;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'if_ctx->cache->flags = NETSNMP_CACHE_DONT_INVALIDATE_ON_SET;\n'
-            tableInterfaceString += tableName + '_container_init(&if_ctx->container, if_ctx->cache);\n'
-            tableInterfaceString += 'if(NULL == if_ctx->container) {\n'
-            tableInterfaceString += 'if_ctx->container = netsnmp_container_find("' + tableName + ':table_container");\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += 'if(NULL == if_ctx->container) {\n'
-            tableInterfaceString += 'snmp_log(LOG_ERR,"error creating container in ' + tableName + '_container_init\\n");\n'
-            tableInterfaceString += 'return;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'if(NULL != if_ctx->cache) {\n'
-            tableInterfaceString += 'if_ctx->cache->magic = (void*)if_ctx->container;\n'
-            tableInterfaceString += '}\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'void _' + tableName + '_container_shutdown(' + tableName + '_interface_ctx *if_ctx) {\n'
-            tableInterfaceString += 'DEBUGMSGTL(("internal:' + tableName + ':_' + tableName + '_container_shutdown","called\\n"));\n\n'
-            tableInterfaceString += tableName + '_container_shutdown(if_ctx->container);\n'
-            tableInterfaceString += '_container_free(if_ctx->container);\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += tableName + '_rowreq_ctx *' + tableName + '_row_find_by_mib_index(' + tableName + '_mib_index *mib_idx) {\n'
-            tableInterfaceString += tableName + '_rowreq_ctx *rowreq_ctx;\n'
-            tableInterfaceString += 'oid oid_tmp[MAX_OID_LEN];\n'
-            tableInterfaceString += 'netsnmp_index oid_idx;\n'
-            tableInterfaceString += 'int rc;\n\n'
-            tableInterfaceString += 'oid_idx.oids = oid_tmp;\n'
-            tableInterfaceString += 'oid_idx.len = sizeof(oid_tmp)/sizeof(oid);\n\n'
-            tableInterfaceString += 'rc = ' + tableName + '_index_to_oid(&oid_idx, mib_idx);\n'
-            tableInterfaceString += 'if(MFD_SUCCESS != rc) {\n'
-            tableInterfaceString += 'return NULL;\n'
-            tableInterfaceString += '}\n\n'
-            tableInterfaceString += 'rowreq_ctx = (' + tableName + '_rowreq_ctx *)CONTAINER_FIND(' + tableName + '_if_ctx.container, &oid_idx);\n\n'
-            tableInterfaceString += 'return rowreq_ctx;\n'
-            tableInterfaceString += '}\n'
-            self.fileWrite(fileName=tableName + '_interface.c',data=tableInterfaceString)
-
-            tableInterfaceHeaderString = '#ifndef ' + tableName.upper() + '_INTERFACE_H\n'
-            tableInterfaceHeaderString += '#define ' + tableName.upper() + '_INTERFACE_H\n'
-            tableInterfaceHeaderString += '#include "' + tableName + '.h"\n\n'
-            tableInterfaceHeaderString += 'void _' + tableName + '_initialize_interface(' + tableName + '_registration *user_ctx, u_long flags);\n'
-            tableInterfaceHeaderString += 'void _' + tableName + '_shutdown_interface(' + tableName + '_registration *user_ctx);\n'
-            tableInterfaceHeaderString += tableName + '_registration *' + tableName + '_registration_get(void);\n'
-            tableInterfaceHeaderString += tableName + '_registration *' + tableName + '_registration_set(' + tableName + '_registration *newreg);\n'
-            tableInterfaceHeaderString += 'netsnmp_container *' + tableName + '_container_get(void);\n'
-            tableInterfaceHeaderString += 'int ' + tableName + '_container_size(void);\n'
-            tableInterfaceHeaderString += tableName + '_rowreq_ctx *' + tableName + '_allocate_rowreq_ctx(void*);\n'
-            tableInterfaceHeaderString += 'void ' + tableName + '_release_rowreq_ctx(' + tableName + '_rowreq_ctx *rowreq_ctx);\n'
-            tableInterfaceHeaderString += 'int ' + tableName + '_index_to_oid(netsnmp_index *oid_idx, ' + tableName + '_mib_index *mib_idx);\n'
-            tableInterfaceHeaderString += 'int ' + tableName + '_index_from_oid(netsnmp_index *oid_idx, ' + tableName + '_mib_index *mib_idx);\n'
-            tableInterfaceHeaderString += 'void ' + tableName + '_valid_columns_set(netsnmp_column_info *vc);\n'
-            tableInterfaceHeaderString += '#endif'
-            self.fileWrite(fileName=tableName + '_interface.h',data=tableInterfaceHeaderString)
+            self.generateTableInterfaceDotCFile(tableName)
+            self.generateTableInterfaceDotHFile(tableName)
         return
 
     def genNotificationFile(self, moduleName):
@@ -3477,7 +3842,7 @@ class NetSnmpCodeGen(AbstractCodeGen):
             notificationFileString += '}\n'
             notificationFileString += 'return 0;\n'
             notificationFileString += '}\n\n'
-            self.fileWrite(fileName=moduleName + '_traps.c', data=notificationFileString)
+        self.fileWrite(fileName=moduleName + '_traps.c', data=notificationFileString)
 
     def genHeaderFile(self, moduleName):
         headerString = '#ifndef ' + moduleName + '_H\n'

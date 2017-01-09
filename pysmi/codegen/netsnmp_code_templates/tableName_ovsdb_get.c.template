@@ -1,0 +1,15 @@
+#include "openswitch-idl.h"
+#include "ovsdb-idl.h"
+#include "vswitch-idl.h"
+#include "openvswitch/vlog.h"
+
+#include "@@SUBSTITUTE_MODULE_NAME@@_custom.h"
+#include "@@SUBSTITUTE_TABLE_NAME@@_ovsdb_get.h"
+
+void @@SUBSTITUTE_TABLE_NAME@@_ovsdb_idl_init(struct ovsdb_idl* idl) {
+
+ @@SUBSTITUTE_ADD_OVSDB_COLS_TO_IDL@@
+
+}
+
+@@SUBSTITUTE_GENERATE_OVSDB_GET_FN_DECLNS_FOR_ALL_IDX_AND_COLUMNS_OF_TBL@@

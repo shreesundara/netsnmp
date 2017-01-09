@@ -1,0 +1,28 @@
+#include <net-snmp/net-snmp-config.h>
+#include <net-snmp/net-snmp-features.h>
+#include <net-snmp/net-snmp-includes.h>
+#include <net-snmp/agent/net-snmp-agent-includes.h>
+
+#include "@@SUBSTITUTE_TABLE_NAME@@.h"
+
+int @@SUBSTITUTE_TABLE_NAME@@_indexes_set_tbl_idx(@@SUBSTITUTE_TABLE_NAME@@_mib_index *tbl_idx , @@SUBSTITUTE_GET_ALL_IDX_COL_DECLNS_AS_PARAMS_4_INDEXES_SET_FUNC_DEFNN@@ ) {
+	DEBUGMSGTL(("verbose:@@SUBSTITUTE_TABLE_NAME@@:@@SUBSTITUTE_TABLE_NAME@@_indexes_set_tbl_idx","called\n"));
+
+	@@SUBSTITUTE_SET_TBL_INDEXES_FOR_TABLE@@
+
+	return MFD_SUCCESS;
+}
+
+int @@SUBSTITUTE_TABLE_NAME@@_indexes_set(@@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx *rowreq_ctx, @@SUBSTITUTE_GET_ALL_IDX_COL_DECLNS_AS_PARAMS_4_INDEXES_SET_FUNC_DEFNN@@ ) {
+	DEBUGMSGTL(("verbose:@@SUBSTITUTE_TABLE_NAME@@:@@SUBSTITUTE_TABLE_NAME@@_indexes_set","called\n"));
+	if (MFD_SUCCESS != @@SUBSTITUTE_TABLE_NAME@@_indexes_set_tbl_idx(&rowreq_ctx->tbl_idx , @@SUBSTITUTE_GET_ALL_IDX_COL_DECLNS_AS_FUNC_CALL_PARAMS_4_INDEXES_SET_FN@@)) {
+		return MFD_ERROR;
+	}
+	rowreq_ctx->oid_idx.len = sizeof(rowreq_ctx->oid_tmp)/sizeof(oid);
+	if (0 != @@SUBSTITUTE_TABLE_NAME@@_index_to_oid(&rowreq_ctx->oid_idx, &rowreq_ctx->tbl_idx)) {
+		return MFD_ERROR;
+	}
+	return MFD_SUCCESS;
+}
+
+@@SUBSTITUTE_GENERATE_COLUMN_GET_FUNCTION_DEFNS_FOR_ALL_COLUMNS_OF_TABLE@@

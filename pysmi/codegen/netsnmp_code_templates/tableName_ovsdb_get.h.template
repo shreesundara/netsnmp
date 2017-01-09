@@ -1,0 +1,16 @@
+#ifndef @@SUBSTITUTE_TABLE_NAME_UPPER@@_OVSDB_GET_H
+#define @@SUBSTITUTE_TABLE_NAME_UPPER@@_OVSDB_GET_H
+
+#include <net-snmp/net-snmp-config.h>
+#include <net-snmp/net-snmp-features.h>
+#include <net-snmp/net-snmp-includes.h>
+#include <net-snmp/agent/net-snmp-agent-includes.h>
+
+#include "vswitch-idl.h"
+#include "ovsdb-idl.h"
+
+void @@SUBSTITUTE_TABLE_NAME@@_ovsdb_idl_init(struct ovsdb_idl *idl);
+
+@@SUBSTITUTE_OVSDB_GET_FN_DECL_FOR_ALL_IDX_AND_COL@@
+
+#endif

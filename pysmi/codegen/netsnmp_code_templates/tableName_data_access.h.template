@@ -1,0 +1,16 @@
+ #ifndef @@SUBSTITUTE_TABLE_NAME_UPPER@@_DATA_ACCESS_H
+ #define @@SUBSTITUTE_TABLE_NAME_UPPER@@_DATA_ACCESS_H
+
+ extern struct ovsdb_idl *idl;
+ int @@SUBSTITUTE_TABLE_NAME@@_init_data(@@SUBSTITUTE_TABLE_NAME@@_registration *@@SUBSTITUTE_TABLE_NAME@@_reg);
+ #define @@SUBSTITUTE_TABLE_NAME_UPPER@@_CACHE_TIMEOUT @@TIMEOUT_VAL@@
+
+ void @@SUBSTITUTE_TABLE_NAME@@_container_init(netsnmp_container ** container_ptr_ptr, netsnmp_cache *cache);
+ void @@SUBSTITUTE_TABLE_NAME@@_container_shutdown(netsnmp_container *container_ptr);
+ int @@SUBSTITUTE_TABLE_NAME@@_container_load(netsnmp_container *container);
+ void @@SUBSTITUTE_TABLE_NAME@@_container_free(netsnmp_container *container);
+ int @@SUBSTITUTE_TABLE_NAME@@_cache_load(netsnmp_container *container);
+ void @@SUBSTITUTE_TABLE_NAME@@_cache_free(netsnmp_container *container);
+ int @@SUBSTITUTE_TABLE_NAME@@_row_prep(@@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx *rowreq_ctx);
+
+ #endif
