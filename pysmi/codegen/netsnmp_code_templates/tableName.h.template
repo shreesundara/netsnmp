@@ -1,0 +1,49 @@
+ #ifndef @@SUBSTITUTE_TABLE_NAME_UPPER@@_H
+ #define @@SUBSTITUTE_TABLE_NAME_UPPER@@_H
+
+ #include <net-snmp/library/asn1.h>
+ #include "@@SUBSTITUTE_TABLE_NAME@@_oids.h"
+ #include "@@SUBSTITUTE_TABLE_NAME@@_enums.h"
+
+ void init_@@SUBSTITUTE_TABLE_NAME@@(void);
+ void shutdown_@@SUBSTITUTE_TABLE_NAME@@(void);
+ typedef netsnmp_data_list @@SUBSTITUTE_TABLE_NAME@@_registration;
+
+ typedef struct @@SUBSTITUTE_TABLE_NAME@@_data_s {
+	 @@SUBSTITUTE_GET_ALL_NON_IDX_COL_DECLNS_4_TABLE@@
+ } @@SUBSTITUTE_TABLE_NAME@@_data;
+
+ typedef struct @@SUBSTITUTE_TABLE_NAME@@_mib_index_s {
+	 @@SUBSTITUTE_GET_ALL_IDX_COL_DECLNS_4_TABLE@@
+ } @@SUBSTITUTE_TABLE_NAME@@_mib_index;
+
+ //<not_reqd>#define MAX_@@SUBSTITUTE_TABLE_NAME@@_IDX_LEN 1
+
+ typedef struct @@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx_s {
+	 netsnmp_index oid_idx;
+	 oid oid_tmp[MAX_OID_LEN];
+	 @@SUBSTITUTE_TABLE_NAME@@_mib_index tbl_idx;
+	 @@SUBSTITUTE_TABLE_NAME@@_data data;
+	 u_int rowreq_flags;
+	 netsnmp_data_list *@@SUBSTITUTE_TABLE_NAME@@_data_list;
+ } @@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx;
+
+ typedef struct @@SUBSTITUTE_TABLE_NAME@@_ref_rowreq_ctx_s {
+	 @@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx *rowreq_ctx;
+ } @@SUBSTITUTE_TABLE_NAME@@_ref_rowreq_ctx;
+
+ int @@SUBSTITUTE_TABLE_NAME@@_pre_request(@@SUBSTITUTE_TABLE_NAME@@_registration *user_context);
+ int @@SUBSTITUTE_TABLE_NAME@@_post_request(@@SUBSTITUTE_TABLE_NAME@@_registration *user_context, int rc);
+ int @@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx_init(@@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx *rowreq_ctx, void *user_init_ctx);
+ void @@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx_cleanup(@@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx *rowreq_ctx);
+ @@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx* @@SUBSTITUTE_TABLE_NAME@@_row_find_by_mib_index(@@SUBSTITUTE_TABLE_NAME@@_mib_index *mib_idx);
+ extern const oid @@SUBSTITUTE_TABLE_NAME@@_oid[];
+ extern const int @@SUBSTITUTE_TABLE_NAME@@_oid_size;
+
+
+ #include "@@SUBSTITUTE_TABLE_NAME@@_interface.h"
+ #include "@@SUBSTITUTE_TABLE_NAME@@_data_access.h"
+ #include "@@SUBSTITUTE_TABLE_NAME@@_data_get.h"
+ #include "@@SUBSTITUTE_TABLE_NAME@@_data_set.h"
+
+ #endif

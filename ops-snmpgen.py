@@ -34,7 +34,7 @@ dstFormat = 'pysnmp'
 dstDirectory = os.path.join(os.path.expanduser("~"), '.pysnmp', 'mibs')
 dstDirectory = os.path.expanduser("~")
 if sys.platform[:3] == 'win':
-    dstDirectory = os.path.join(dstDirectory, 'PySNMP Configuration', 'mibs')
+    dstDirectory = os.path.join(dstDirectory, 'PySNMP_Configuration', 'mibs')
 else:
     dstDirectory = os.path.join(dstDirectory, '.pysnmp', 'mibs')
 cacheDirectory = ''
@@ -49,6 +49,7 @@ buildIndexFlag = False
 mappingFile = ''
 clangFormatPath = ''
 jsonTables = []
+scalarMapping = ''
 
 helpMessage = """\
 Usage: %s [--help]
@@ -75,6 +76,7 @@ Usage: %s [--help]
       [--mapping-file=<path>]
       [--clang-format=<path>]
       [--jsonTables=<tables>]
+      [--scalarMapping=<1>]
 Where:
     url      - file, http, https, ftp, sftp schemes are supported.
                Use @mib@ placeholder token in URL location to refer
@@ -89,7 +91,7 @@ try:
          'destination-format=', 'destination-directory=', 'cache-directory=',
          'no-dependencies', 'no-python-compile', 'python-optimization-level=',
          'ignore-errors', 'build-index', 'rebuild', 'dry-run',
-         'generate-mib-texts', 'disable-fuzzy-source', 'mapping-file=', 'clang-format=', 'jsonTables='])
+         'generate-mib-texts', 'disable-fuzzy-source', 'mapping-file=', 'clang-format=', 'jsonTables=', 'scalarMapping='])
 except Exception:
     if verboseFlag:
         sys.stderr.write('ERROR: %s\r\n%s\r\n' % (sys.exc_info()[1], helpMessage))
@@ -160,6 +162,8 @@ Software documentation and support at http://pysmi.sf.net
         clangFormatPath = opt[1]
     if opt[0] == '--jsonTables':
         jsonTables = opt[1].split(',')
+    if opt[0] == '--scalarMapping':
+        scalarMapping = opt[1]
 
 
 if not mibSearchers:
@@ -237,7 +241,7 @@ writer = CFileWriter(dstDirectory)
 mibCompiler = MibCompiler(parserFactory(**smiV1Relaxed)(tempdir=cacheDirectory),
     NetSnmpCodeGen(writer,**dict(mappingFile=mappingFile,
                                  clangFormatPath=clangFormatPath,
-                                 jsonTables=jsonTables)),
+                                 jsonTables=jsonTables,scalarMapping=scalarMapping)),
     writer)
 
 try:
@@ -276,5 +280,5 @@ else:
         sys.stderr.write('Missing source MIBs: %s\r\n' % ', '.join(['%s' % x for x in sorted(processed) if processed[x] == 'missing']))
         sys.stderr.write('Ignored MIBs: %s\r\n' % ', '.join(['%s' % x for x in sorted(processed) if processed[x] == 'unprocessed']))
         sys.stderr.write('Failed MIBs: %s\r\n' % ', '.join(['%s (%s)' % (x,processed[x].error) for x in sorted(processed) if processed[x] == 'failed']))
-
+    raw_input("Enter any key to exit")
     sys.exit(0)

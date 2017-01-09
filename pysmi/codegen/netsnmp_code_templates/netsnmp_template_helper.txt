@@ -1,0 +1,523 @@
+{
+
+"ovsdb_table_row_ptr_declaration" : [
+
+"                                              const struct ovsrec_@@SUBSTITUTE_OVSDB_TABLE@@ *@@SUBSTITUTE_OVSDB_TABLE@@_row = NULL;                                                                                                                                                                 "
+
+],
+
+
+
+
+"octet_str_mib_type_declaration" : [
+
+"                                              @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@[@@COLUMN_OR_IDX_SIZE@@];                                                                                                                                                  ",
+"                                              size_t @@SUBSTITUTE_IDX_OR_CLM_NAME@@_len;                                                                                                                                                                                                              "
+
+],
+
+
+
+"obj_identifier_mib_type_declaration" : [
+
+
+"                                              @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@[@@COLUMN_OR_IDX_SIZE@@];                                                                                                                                                  ",
+"                                              size_t @@SUBSTITUTE_IDX_OR_CLM_NAME@@_len;                                                                                                                                                                                                              "
+
+
+],
+
+
+
+"primitive_mib_type_declaration" : [
+
+"                                              @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@;                                                                                                                                                                          "
+
+],
+
+
+
+
+"ovsdb_row_ptr_initialization" :[
+
+
+
+"                                              @@SUBSTITUTE_OVSDB_TABLE@@_row = ovsrec_@@SUBSTITUTE_OVSDB_TABLE@@_first(idl);                                                                                                                                                                          ",
+"                                                  if (!@@SUBSTITUTE_OVSDB_TABLE@@_row) {                                                                                                                                                                                                              ",
+"                                                  snmp_log(LOG_ERR, \"not able to fetch @@SUBSTITUTE_OVSDB_TABLE@@ row\");                                                                                                                                                                            ",
+"                                                  return -1;                                                                                                                                                                                                                                          ",
+"                                              }                                                                                                                                                                                                                                                       "
+
+
+],
+
+
+
+
+"container_load_ovsrec_for_each_body" : [
+
+"                                              OVSREC_@@SUBSTITUTE_ROOT_OVS_TBL_UPPER@@_FOR_EACH(@@SUBSTITUTE_ROOT_OVS_TBL@@_row, idl) {                                                                                                                                                               ",
+"                                                  @@SUBSTITUTE_TABLE_SKIP_FN_CALL@@                                                                                                                                                                                                                   ",
+"                                                  @@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_CONDITION_TYPES@@                                                                                                                                                                                            ",
+"                                              }//end of for-each loop..                                                                                                                                                                                                                               "
+],
+
+
+
+"skip_fn_call_statement" : [
+
+"                                              if(@@SUBSTITUTE_SKIP_FN_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL@@_row)) {                                                                                                                                                                                  ",
+"                                                  continue;                                                                                                                                                                                                                                            ",
+"                                              }                                                                                                                                                                                                                                                        "
+
+],
+
+
+
+"skip_fn_declaration" : [
+
+"                                              int @@SUBSTITUTE_SKIP_FN_NAME@@(struct ovsdb_idl *idl,                                                                                                                                                                                                    ",
+"                                                                              const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL@@ *@@SUBSTITUTE_ROOT_OVS_TBL@@_row);                                                                                                                                        "
+
+],
+
+
+
+"ovsdb_get_for_multiple_type_support" : [
+
+
+"                                                  if(@@SUBSTITUTE_APPEND_PARAM_NAME_LOWER@@_check_custom_function(idl,@@SUBSTITUTE_ROOT_OVS_TBL@@_row)) {                                                                                                                                                ",
+"                                                      @@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_IDX_OR_CLM@@                                                                                                                                                                                                ",
+"                                                  }                                                                                                                                                                                                                                                      "
+
+],
+
+
+
+"multiple_type_support_check_custom_fn_prototype" : [
+
+
+"                                               int @@SUBSTITUTE_APPEND_PARAM_NAME_LOWER@@_check_custom_function(                                                                                                                                                                                          ",
+"                                                                                                                struct ovsdb_idl *idl,                                                                                                                                                                    ",
+"                                                                                                                const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL@@ *@@SUBSTITUTE_ROOT_OVS_TBL@@_row)                                                                                                         "
+
+
+],
+
+
+
+"multiple_type_support_check_custom_fn_body" : [
+
+"                                                  /*return 1 - if @@SUBSTITUTE_APPEND_PARAM_NAME@@ type or */                                                                                                                                                                                              ",
+"                                                  /*return 0 - if not @@SUBSTITUTE_APPEND_PARAM_NAME@@ type */                                                                                                                                                                                             "
+
+],
+
+
+
+"ovsdb_get_for_inetv4_type" : [
+
+"                                                  if(@@SUBSTITUTE_ROOT_OVS_TBL@@Table_check_inetv4_custom_function(idl,@@SUBSTITUTE_ROOT_OVS_TBL@@_row)) {                                                                                                                                                  ",
+"                                                      @@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_IDX_OR_CLM@@                                                                                                                                                                                                   ",
+"                                                  }                                                                                                                                                                                                                                                         "
+
+],
+
+
+
+"inetv4_type_check_custom_fn_prototype" : [
+
+"                                                   int @@SUBSTITUTE_ROOT_OVS_TBL@@Table_check_inetv4_custom_function(                                                                                                                                                                                        ",
+"                                                                                                                     struct ovsdb_idl *idl,                                                                                                                                                                  ",
+"                                                                                                                     const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL@@ *@@SUBSTITUTE_ROOT_OVS_TBL@@_row)                                                                                                       "
+
+],
+
+
+
+"inetv4_type_check_custom_fn_body" : [
+
+"                                                  /*return 1 - if ipv4 type or */                                                                                                                                                                                                                            ",
+"                                                  /*return 0 - if not ipv4 type */                                                                                                                                                                                                                           "
+
+],
+
+
+
+"ovsdb_get_for_inetv6_type" : [
+
+"                                                  if(@@SUBSTITUTE_ROOT_OVS_TBL@@Table_check_inetv6_custom_function(idl,@@SUBSTITUTE_ROOT_OVS_TBL@@_row)) {                                                                                                                                                  ",
+"                                                      @@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_IDX_OR_CLM@@                                                                                                                                                                                                   ",
+"                                                  }                                                                                                                                                                                                                                                         "
+
+],
+
+
+
+"inetv6_type_check_custom_fn_prototype" : [
+
+"                                                   int @@SUBSTITUTE_ROOT_OVS_TBL@@Table_check_inetv6_custom_function(                                                                                                                                                                                        ",
+"                                                                                                                     struct ovsdb_idl *idl,                                                                                                                                                                  ",
+"                                                                                                                     const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL@@ *@@SUBSTITUTE_ROOT_OVS_TBL@@_row)                                                                                                       "
+
+],
+
+
+
+"inetv6_type_check_custom_fn_body" : [
+
+"                                                  /*return 1 - if ipv6 type or */                                                                                                                                                                                                                            ",
+"                                                  /*return 0 - if not ipv6 type */                                                                                                                                                                                                                           "
+
+],
+
+
+
+"ovsdb_get_for_single_type" : [
+
+"                                                  @@SUBSTITUTE_OVSDB_GET_FN_CALL_FOR_ALL_IDX_OR_CLM@@                                                                                                                                                                                                        "
+
+],
+
+
+
+"ovsdb_get_fn_call_with_ovstable_and_string_type" : [
+
+"                                                  ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(idl,                                                                                                                                                                                                              ",
+"                                                                                           @@SUBSTITUTE_ROOT_OVS_TBL@@_row,                                                                                                                                                                                  ",
+"                                                                                           @@SUBSTITUTE_LOCAL_OVS_TBL@@_row,                                                                                                                                                                                 ",
+"                                                                                           @@SUBSTITUTE_IDX_OR_CLM_NAME@@,                                                                                                                                                                                   ",
+"                                                                                           &@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len @@SUBSTITUTE_APPEND_TYPE_BASED_FLAG_PARAM@@);                                                                                                                                 "
+
+],
+
+
+
+"ovsdb_get_fn_call_with_ovstable_and_primitive_type" : [
+
+
+"                                                 ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(idl,                                                                                                                                                                                                                ",
+"                                                                                             @@SUBSTITUTE_ROOT_OVS_TBL@@_row,                                                                                                                                                                                  ",
+"                                                                                             @@SUBSTITUTE_LOCAL_OVS_TBL@@_row,                                                                                                                                                                                 ",
+"                                                                                             &@@SUBSTITUTE_IDX_OR_CLM_NAME@@ @@SUBSTITUTE_APPEND_TYPE_BASED_FLAG_PARAM@@);                                                                                                                                     "
+
+
+],
+
+
+
+"ovsdb_get_fn_call_with_root_ovstable_and_string_type" : [
+
+"                                                  ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(idl,                                                                                                                                                                                                              ",
+"                                                                                           @@SUBSTITUTE_ROOT_OVS_TBL@@_row,                                                                                                                                                                                  ",
+"                                                                                           @@SUBSTITUTE_IDX_OR_CLM_NAME@@,                                                                                                                                                                                   ",
+"                                                                                           &@@SUBSTITUTE_IDX_OR_CLM_NAME@@_len @@SUBSTITUTE_APPEND_TYPE_BASED_FLAG_PARAM@@);                                                                                                                                 "
+
+],
+
+
+
+"ovsdb_get_fn_call_with_root_ovstable_and_primitive_type" : [
+
+
+"                                                 ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(idl,                                                                                                                                                                                                                ",
+"                                                                                             @@SUBSTITUTE_ROOT_OVS_TBL@@_row,                                                                                                                                                                                  ",
+"                                                                                             &@@SUBSTITUTE_IDX_OR_CLM_NAME@@ @@SUBSTITUTE_APPEND_TYPE_BASED_FLAG_PARAM@@);                                                                                                                                     "
+
+
+],
+
+
+
+"ovsdb_get_fn_defn_with_root_ovstable" : [
+
+"                                              void ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(struct ovsdb_idl *idl, const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row,                                                                                                ",
+"                                                                                            @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@) {                                                                                                                        ",
+"                                                  @@SUBSTITUTE_FN_BODY_4_OVS_TBL_NOT_SPECIFIED@@                                                                                                                                                                                                              ",
+"                                              }                                                                                                                                                                                                                                                               "
+
+
+],
+
+
+
+"ovsdb_get_fn_defn_with_new_ovstable" : [
+
+
+"                                              void ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(struct ovsdb_idl *idl, const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row,                                                                                                ",
+"                                                                                            const struct ovsrec_@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@ *@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row,                                                                                                                     ",
+"                                                                                            @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@) {                                                                                                                        ",
+"                                                  @@SUBSTITUTE_FN_BODY_4_DIFFERENT_OVS_TBL_SPECIFIED@@                                                                                                                                                                                                        ",
+"                                              }                                                                                                                                                                                                                                                               "
+
+
+],
+
+
+"ovsdb_get_fn_defn_4_same_root_and_new_ovs_tbl" : [
+
+"                                              void ovsdb_get_@@SUBSTITUTE_IDX_OR_CLM_NAME@@(struct ovsdb_idl *idl, const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row,                                                                                                ",
+"                                                                                            @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@) {                                                                                                                        ",
+"                                                  @@SUBSTITUTE_FN_BODY_4_SAME_OVS_TBL_SPECIFIED@@                                                                                                                                                                                                             ",
+"                                              }                                                                                                                                                                                                                                                               "
+
+
+],
+
+
+
+
+"ovsdg_get_fn_body_4_root_ovsTbl_and_octet_str_type" : [
+
+"                                              *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = '\\0';                                                                                                                        ",
+"                                              *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len = 0;                                                                                                                        "
+
+],
+
+
+
+
+"ovsdg_get_fn_body_4_root_ovsTbl_and_object_identifier_type" : [
+
+"                                              *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (oid)NULL;                                                                                                                        ",
+"                                              *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len = 0;                                                                                                                            "
+
+],
+
+
+
+
+"ovsdg_get_fn_body_4_root_ovsTbl_and_primitive_type" : [
+
+
+"                                             *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)NULL;                                                                            "
+
+
+],
+
+
+
+"ovsdb_get_fn_body_4_value_map_ovsCol_where_key_is_str_and_value_is_str" : [
+
+"                                             for (int i = 0; i < @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->n_@@SUBSTITUTE_OVS_COL_NAME@@; i++) {                                                                                                      ",
+"                                                  if(strcmp(\"##PUT_MULTIPLE_KEY_VALUES_HERE_IF_AVAILABLE##\", @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->key_@@SUBSTITUTE_OVS_COL_NAME@@[i]) == 0) {                                                    ",
+"                                                      temp = (char*)@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->value_@@SUBSTITUTE_OVS_COL_NAME@@[i];                                                                                                   ",
+"                                                  }                                                                                                                                                                                                ",
+"                                              }                                                                                                                                                                                                    "
+
+],
+
+
+
+"ovsdb_get_fn_body_4_value_map_ovsCol_where_key_is_int_and_value_is_str" : [
+
+"                                              for (int i = 0; i < @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->n_@@SUBSTITUTE_OVS_COL_NAME@@; i++) {                                                                                                                        ",
+"                                                  if(##PUT_MULTIPLE_KEY_VALUES_HERE_IF_AVAILABLE## == @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->key_@@SUBSTITUTE_OVS_COL_NAME@@[i]) {                                                                                    ",
+"                                                      temp = (char*)@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->value_@@SUBSTITUTE_OVS_COL_NAME@@[i];                                                                                                                      ",
+"                                                  }                                                                                                                                                                                                                   ",
+"                                              }                                                                                                                                                                                                                       "
+
+
+],
+
+
+
+"ovsdb_get_fn_body_4_smap_ovsCol_and_value_is_str" : [
+
+"                                              temp = (char*)smap_get(&@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->@@SUBSTITUTE_OVS_COL_NAME@@, \"##PUT_MULTIPLE_KEY_VALUES_HERE_IF_AVAILABLE##\");                                                                            "
+
+],
+
+
+
+"ovsdg_get_fn_body_4_ovsCol_string_type" : [
+
+"                                              temp = (char*)@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->##PUT_MULTIPLE_OVSDB_COLUMNS_HERE_IF_AVAILABLE##;                                                                                                                  "
+
+],
+
+
+"ovsdb_get_fn_body_4_value_map_ovsCol_where_key_is_str_and_value_is_int" : [
+
+
+"                                              for (int i = 0; i < @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->n_@@SUBSTITUTE_OVS_COL_NAME@@; i++) {                                                                                                                                                             ",
+"                                                  if(strcmp(\"##PUT_MULTIPLE_KEY_VALUES_HERE_IF_AVAILABLE##\", @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->key_@@SUBSTITUTE_OVS_COL_NAME@@[i]) == 0) {                                                                                                            ",
+"                                                      *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->value_@@SUBSTITUTE_OVS_COL_NAME@@[i];                                                                               ",
+"                                                  }                                                                                                                                                                                                                                                        ",
+"                                              }                                                                                                                                                                                                                                                            "
+
+
+],
+
+
+
+"ovsdb_get_fn_body_4_value_map_ovsCol_where_key_is_int_and_value_is_int" : [
+
+
+"                                              for (int i = 0; i < @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->n_@@SUBSTITUTE_OVS_COL_NAME@@; i++) {                                                                                                                        ",
+"                                                  if(##PUT_MULTIPLE_KEY_VALUES_HERE_IF_AVAILABLE## == @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->key_@@SUBSTITUTE_OVS_COL_NAME@@[i]) {                                                                                    ",
+"                                                      *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->value_@@SUBSTITUTE_OVS_COL_NAME@@[i];                                          ",
+"                                                  }                                                                                                                                                                                                                   ",
+"                                              }                                                                                                                                                                                                                       "
+
+
+],
+
+
+
+"ovsdb_get_fn_body_4_smap_col_and_value_is_int" : [
+
+
+"                                              char *temp = (char*)smap_get(&@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->@@SUBSTITUTE_OVS_COL_NAME@@, \"@@SUBSTITUTE_TYPE_KEY@@\");                                              ",
+"                                              if(temp == NULL) {                                                                                                                                                           ",
+"                                                  *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = 0;                                                                                                                             ",
+"                                              }                                                                                                                                                                            ",
+"                                              else {                                                                                                                                                                       ",
+"                                                  *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)atoi(temp);                                                                    ",
+"                                              }                                                                                                                                                                            "
+
+
+],
+
+
+
+"ovsdg_get_fn_body_4_ovsCol_primitive_type" : [
+
+
+"                                              *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr = (@@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@)*(@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row->##PUT_MULTIPLE_OVSDB_COLUMNS_HERE_IF_AVAILABLE##);                                                "
+
+
+],
+
+
+
+"copy_ovsdb_val_to_snmp_response_as_octet_str" : [
+
+"                                              *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len = temp != NULL ? strlen(temp) : 0;                                                                                                                        ",
+"                                              memcpy(@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr, temp, *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len);                                                                                                    "
+
+],
+
+
+
+"copy_ovsdb_val_to_snmp_response_as_object_identifier" : [
+
+"                                              oid temp_oid[MAX_OID_LEN] = {0};                                                                                                           ",
+"                                              *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len = MAX_OID_LEN;                                                                                 ",
+"                                              if (temp != NULL) {                                                                                                                        ",
+"                                              snmp_parse_oid(temp, temp_oid, @@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len);                                                                ",
+"                                              }                                                                                                                                          ",
+"                                              memcpy(@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr, temp_oid, *@@SUBSTITUTE_IDX_OR_CLM_NAME@@_val_ptr_len);                                     "
+
+],
+
+
+
+"custom_fn_call_for_only_root_ovs_tbl" : [
+
+"                                            @@SUBSTITUTE_CUSTOM_FN_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row,                                                                                                                         ",
+"                                                                          @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_CALL@@ @@SUBSTITUTE_COND_FLAG_PARAM_VAL@@);                                                                           "
+
+
+],
+
+
+
+
+"custom_fn_prototype_4_only_rootOvsTbl" : [
+
+"                                       void @@SUBSTITUTE_CUSTOM_FN_NAME@@(struct ovsdb_idl *idl,                                                                                                                        ",
+"                                                                          const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row,                                                   ",
+"                                                                          @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@ )                                                     "
+
+
+],
+
+
+
+
+
+
+"custom_fn_call_4_local_ovsTbl" : [
+
+"                                             @@SUBSTITUTE_CUSTOM_FN_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row, @@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row,                                                                                                                        ",
+"                                                                          @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_CALL@@ @@SUBSTITUTE_COND_FLAG_PARAM_VAL@@);                                                                                                                  "
+
+],
+
+
+
+"custom_fn_prototype_4_local_ovsTbl" : [
+
+"                                       void @@SUBSTITUTE_CUSTOM_FN_NAME@@(struct ovsdb_idl *idl,                                                                                                                        ",
+"                                                                          const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row,                                                   ",
+"                                                                          const struct ovsrec_@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@ *@@SUBSTITUTE_LOCAL_OVS_TBL_NAME@@_row,                                                 ",
+"                                                                          @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@ )                                                     "
+
+
+],
+
+
+
+"custom_fn_call_for_same_rootOvsTbl_and_LocalOvsTbl" : [
+
+
+"                                            @@SUBSTITUTE_CUSTOM_FN_NAME@@(idl, @@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row,                                                                                                             ",
+"                                                                          @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_CALL@@ @@SUBSTITUTE_COND_FLAG_PARAM_VAL@@);                                                               "
+
+
+],
+
+
+
+"custom_fn_prototype_4_same_root_and_local_ovsTbl" : [
+
+
+"                                       void @@SUBSTITUTE_CUSTOM_FN_NAME@@(struct ovsdb_idl *idl,                                                                                                                        ",
+"                                                                          const struct ovsrec_@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@ *@@SUBSTITUTE_ROOT_OVS_TBL_NAME@@_row,                                                   ",
+"                                                                          @@SUBSTITUTE_IDX_OR_CLM_DECLN_4_OVSDB_GET_FN_DEFN@@ @@SUBSTITUTE_COND_FLAG_PARAM_DEFN@@ )                                                     "
+
+
+]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}

@@ -1,0 +1,65 @@
+#include <net-snmp/net-snmp-config.h>
+#include <net-snmp/net-snmp-features.h>
+#include <net-snmp/net-snmp-includes.h>
+#include <net-snmp/agent/net-snmp-agent-includes.h>
+
+#include "@@SUBSTITUTE_MODULE_NAME@@_custom.h"
+#include "@@SUBSTITUTE_TABLE_NAME@@.h"
+#include "@@SUBSTITUTE_TABLE_NAME@@_data_access.h"
+#include "@@SUBSTITUTE_TABLE_NAME@@_ovsdb_get.h"
+
+#include "openswitch-idl.h"
+#include "ovsdb-idl.h"
+#include "vswitch-idl.h"
+#include "openvswitch/vlog.h"
+
+int @@SUBSTITUTE_TABLE_NAME@@_init_data(@@SUBSTITUTE_TABLE_NAME@@_registration *@@SUBSTITUTE_TABLE_NAME@@_reg) {
+   DEBUGMSGTL(("verbose:@@SUBSTITUTE_TABLE_NAME@@:@@SUBSTITUTE_TABLE_NAME@@_init_data","called\n"));
+   return MFD_SUCCESS;
+}
+
+void @@SUBSTITUTE_TABLE_NAME@@_container_init(netsnmp_container **container_ptr_ptr, netsnmp_cache *cache) {
+   DEBUGMSGTL(("verbose:@@SUBSTITUTE_TABLE_NAME@@:@@SUBSTITUTE_TABLE_NAME@@_container_init","called\n"));
+   if (NULL == container_ptr_ptr) {
+	   snmp_log(LOG_ERR,"bad container param to @@SUBSTITUTE_TABLE_NAME@@_container_init\n");
+	   return;
+   }
+   *container_ptr_ptr = NULL;
+   if (NULL == cache) {
+	   snmp_log(LOG_ERR,"bad cache param to @@SUBSTITUTE_TABLE_NAME@@_container_init\n");
+	   return;
+   }
+   cache->timeout = @@SUBSTITUTE_TABLE_NAME_UPPER@@_CACHE_TIMEOUT;
+}
+
+void @@SUBSTITUTE_TABLE_NAME@@_container_shutdown(netsnmp_container *container_ptr) {
+   DEBUGMSGTL(("verbose:@@SUBSTITUTE_TABLE_NAME@@:@@SUBSTITUTE_TABLE_NAME@@_container_shutdown","called\n"));
+   if (NULL == container_ptr) {
+	   snmp_log(LOG_ERR, "bad params to @@SUBSTITUTE_TABLE_NAME@@_container_shutdown\n");
+	   return;
+   }
+}
+
+int @@SUBSTITUTE_TABLE_NAME@@_container_load(netsnmp_container *container) {
+   DEBUGMSGTL(("verbose:@@SUBSTITUTE_TABLE_NAME@@:@@SUBSTITUTE_TABLE_NAME@@_container_load","called\n"));
+   @@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx *rowreq_ctx;
+   size_t count = 0;
+
+   @@SUBSTITUTE_OVSDB_ROW_STRINGS_FOR_TABLE@@
+   @@SUBSTITUTE_GET_ALL_LOCAL_STRINGS_FOR_TABLE@@
+   @@SUBSTITUTE_GET_FIRST_INSTANCE_STRINGS_FOR_TABLE@@
+   @@SUBSTITUTE_GET_FOR_LOOP_STR_FOR_TABLE@@
+
+   DEBUGMSGTL(("verbose:@@SUBSTITUTE_TABLE_NAME@@:@@SUBSTITUTE_TABLE_NAME@@_container_load","inserted %d records\n",(int)count));
+   return MFD_SUCCESS;
+}
+
+void @@SUBSTITUTE_TABLE_NAME@@_container_free(netsnmp_container *container) {
+   DEBUGMSGTL(("verbose:@@SUBSTITUTE_TABLE_NAME@@:@@SUBSTITUTE_TABLE_NAME@@_container_free","called\n"));
+}
+
+int @@SUBSTITUTE_TABLE_NAME@@_row_prep(@@SUBSTITUTE_TABLE_NAME@@_rowreq_ctx *rowreq_ctx) {
+   DEBUGMSGTL(("verbose:@@SUBSTITUTE_TABLE_NAME@@:@@SUBSTITUTE_TABLE_NAME@@_row_prep","called\n"));
+   netsnmp_assert(NULL != rowreq_ctx);
+   return MFD_SUCCESS;
+}
