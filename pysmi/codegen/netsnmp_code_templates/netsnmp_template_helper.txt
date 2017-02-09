@@ -11,8 +11,8 @@
 
 "octet_str_mib_type_declaration" : [
 
-"                                              @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@[@@COLUMN_OR_IDX_SIZE@@];                                                                                                                                                  ",
-"                                              size_t @@SUBSTITUTE_IDX_OR_CLM_NAME@@_len;                                                                                                                                                                                                              "
+"                                              @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@[@@COLUMN_OR_IDX_SIZE@@] = {'\0'};                                                                                                                                                  ",
+"                                              size_t @@SUBSTITUTE_IDX_OR_CLM_NAME@@_len = 0;                                                                                                                                                                                                              "
 
 ],
 
@@ -21,8 +21,8 @@
 "obj_identifier_mib_type_declaration" : [
 
 
-"                                              @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@[@@COLUMN_OR_IDX_SIZE@@];                                                                                                                                                  ",
-"                                              size_t @@SUBSTITUTE_IDX_OR_CLM_NAME@@_len;                                                                                                                                                                                                              "
+"                                              @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@[@@COLUMN_OR_IDX_SIZE@@] = {0};                                                                                                                                                  ",
+"                                              size_t @@SUBSTITUTE_IDX_OR_CLM_NAME@@_len = 0;                                                                                                                                                                                                              "
 
 
 ],
@@ -31,7 +31,7 @@
 
 "primitive_mib_type_declaration" : [
 
-"                                              @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@;                                                                                                                                                                          "
+"                                              @@SUBSTITUTE_GET_OBJECT_TYPE_EQUIVALENT_IN_C@@ @@SUBSTITUTE_IDX_OR_CLM_NAME@@ = 0;                                                                                                                                                                          "
 
 ],
 
