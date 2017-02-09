@@ -1804,26 +1804,26 @@ class NetSnmpCodeGen(AbstractCodeGen):
             idxType = self.getObjTypeString(idx)
             if idxType == 'OctetString':
                 stringLength = self.getStringLength(idx)
-                outStr += 'char ' + idx['name'] + '[' + str(stringLength) + '];\n'
-                outStr += 'size_t ' + idx['name'] + '_len;\n'
+                outStr += 'char ' + idx['name'] + '[' + str(stringLength) + '] = {\'\\0\'};\n'
+                outStr += 'size_t ' + idx['name'] + '_len = 0;\n'
             elif idxType == 'ObjectIdentifier':
-                outStr += 'oid ' + idx['name'] + '[MAX_OID_LEN];\n'
-                outStr += 'size_t ' + idx['name'] + '_len;\n'
+                outStr += 'oid ' + idx['name'] + '[MAX_OID_LEN] = {0};\n'
+                outStr += 'size_t ' + idx['name'] + '_len = 0;\n'
             else:
-                outStr += self.ctypeClasses[idxType] + ' ' + idx['name'] + ';\n'
+                outStr += self.ctypeClasses[idxType] + ' ' + idx['name'] + ' = 0;\n'
         outStr += '\n'
         for col in self.tableRows[self.tables[tableName]['row']]['columns']:
             if col['name'] not in [idx['name'] for idx in indexes]:
                 colType = self.getObjTypeString(col)
                 if colType == 'OctetString':
                     stringLength = self.getStringLength(col)
-                    outStr += 'char ' + col['name'] + '[' + str(stringLength) + '];\n'
-                    outStr += 'size_t ' + col['name'] + '_len;\n'
+                    outStr += 'char ' + col['name'] + '[' + str(stringLength) + '] = {\'\\0\'};\n'
+                    outStr += 'size_t ' + col['name'] + '_len = 0;\n'
                 elif colType == 'ObjectIdentifier':
-                    outStr += 'oid ' + col['name'] + '[MAX_OID_LEN];\n'
-                    outStr += 'size_t ' + col['name'] + '_len;\n'
+                    outStr += 'oid ' + col['name'] + '[MAX_OID_LEN] = {0};\n'
+                    outStr += 'size_t ' + col['name'] + '_len = 0;\n'
                 else:
-                    outStr += self.ctypeClasses[colType] + ' ' + col['name'] + ';\n'
+                    outStr += self.ctypeClasses[colType] + ' ' + col['name'] + '; = 0\n'
         return outStr + '\n'
 
     def getFirstIntanceStringForTable(self, tableName, tables):
